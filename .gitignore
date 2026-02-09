@@ -1,0 +1,18 @@
+# secrets
+.env
+
+# virtualenv
+.venv/
+backend/.venv/
+
+# python cache
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+.vscode/
+
+# user data / indexes
+backend/data/
+backend/docs/
