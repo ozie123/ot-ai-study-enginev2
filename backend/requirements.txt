@@ -5,3 +5,4 @@ numpy
 faiss-cpu
 pypdf
 openai
+python-multipart
