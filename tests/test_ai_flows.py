@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from types import SimpleNamespace
 
 import httpx
+import numpy as np
 import openai
 import pytest
 
@@ -201,3 +204,27 @@ def test_embeddings_are_batched_and_use_the_configured_model(tmp_path):
     assert vectors.shape == (65, 3)
     assert [len(call["input"]) for call in calls] == [64, 1]
     assert all(call["model"] == "text-embedding-3-small" for call in calls)
+
+
+def test_store_messages_are_safe_for_windows_redirected_stdout(tmp_path, monkeypatch):
+    store = NoteStore(tmp_path / "index", api_key="test-token")
+    monkeypatch.setattr(
+        store,
+        "_embed",
+        lambda texts: np.array([[1.0, 0.0, 0.0] for _ in texts], dtype="float32"),
+    )
+    byte_stream = io.BytesIO()
+    redirected_stdout = io.TextIOWrapper(byte_stream, encoding="cp1252", errors="strict")
+
+    with contextlib.redirect_stdout(redirected_stdout):
+        store.add_chunks(
+            ["Synthetic test fact."],
+            tag="demo",
+            meta_list=[{"source": "demo.pdf", "page": 1, "is_gold": False}],
+        )
+        store.save()
+
+    redirected_stdout.flush()
+    output = byte_stream.getvalue().decode("cp1252")
+    assert "Added 1 chunks" in output
+    assert "Saved to" in output

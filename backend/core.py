@@ -202,7 +202,7 @@ class NoteStore:
         self.tags.extend([tag] * len(chunks))
         self.meta.extend(meta_list)
 
-        print(f"✅ Added {len(chunks)} chunks (tag: {tag}). Total chunks: {len(self.chunks)}")
+        print(f"Added {len(chunks)} chunks (tag: {tag}). Total chunks: {len(self.chunks)}")
 
     def add_notes(self, raw_text: str, tag: str = "untagged"):
         new_chunks = chunk_text(raw_text)
@@ -262,7 +262,7 @@ class NoteStore:
         with open(self.chunks_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
 
-        print(f"💾 Saved to {self.base_path}")
+        print(f"Saved to {self.base_path}")
 
     def load(self) -> bool:
         if not (self.faiss_path.exists() and self.chunks_path.exists()):
