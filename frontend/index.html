@@ -1,800 +1,187 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Turn PDF study notes into grounded answers and revision flashcards.">
+  <meta name="theme-color" content="#07111f">
+  <meta property="og:title" content="OT AI Study Engine">
+  <meta property="og:description" content="A source-grounded AI workspace for study notes.">
+  <meta property="og:type" content="website">
   <title>OT AI Study Engine</title>
-  <style>
-    :root {
-      --bg: #0b1020;
-      --panel: #121a2b;
-      --border: rgba(255,255,255,0.08);
-      --text: #eef2ff;
-      --muted: #9aa6c3;
-      --accent: #6ea8fe;
-      --accent2: #8b5cf6;
-      --success: #22c55e;
-      --warning: #f59e0b;
-      --error: #ef4444;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(110,168,254,0.18), transparent 25%),
-        radial-gradient(circle at top right, rgba(139,92,246,0.15), transparent 20%),
-        linear-gradient(180deg, #08101e 0%, #0b1020 100%);
-      color: var(--text);
-      min-height: 100vh;
-    }
-
-    .container {
-      max-width: 1150px;
-      margin: 0 auto;
-      padding: 32px 20px 50px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 2.3rem;
-    }
-
-    .sub {
-      color: var(--muted);
-      margin-bottom: 26px;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 1.2fr 0.8fr;
-      gap: 20px;
-      margin-bottom: 20px;
-    }
-
-    .card {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 22px;
-      backdrop-filter: blur(8px);
-    }
-
-    .section-title {
-      color: var(--muted);
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 14px;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 0.95rem;
-    }
-
-    input, textarea, select {
-      width: 100%;
-      padding: 14px 15px;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.09);
-      background: rgba(255,255,255,0.04);
-      color: var(--text);
-      outline: none;
-    }
-
-    textarea {
-      min-height: 130px;
-      resize: vertical;
-    }
-
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-    }
-
-    .upload-box {
-      display: block;
-      border: 1.5px dashed rgba(255,255,255,0.18);
-      border-radius: 18px;
-      padding: 24px;
-      text-align: center;
-      background: rgba(255,255,255,0.02);
-      cursor: pointer;
-      transition: 0.2s ease;
-    }
-
-    .upload-box:hover,
-    .upload-box.dragover {
-      border-color: rgba(110,168,254,0.65);
-      background: rgba(110,168,254,0.08);
-    }
-
-    .upload-box strong {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 1rem;
-    }
-
-    .upload-box span {
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-
-    .hidden {
-      display: none;
-    }
-
-    .file-pill {
-      display: inline-block;
-      margin-top: 12px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: rgba(110,168,254,0.12);
-      border: 1px solid rgba(110,168,254,0.24);
-      color: #dce8ff;
-      font-size: 0.9rem;
-    }
-
-    .btn-row {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-top: 16px;
-    }
-
-    button {
-      border: none;
-      border-radius: 14px;
-      padding: 13px 18px;
-      cursor: pointer;
-      font-weight: 600;
-    }
-
-    .btn-primary {
-      color: white;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-    }
-
-    .btn-secondary {
-      color: white;
-      background: rgba(255,255,255,0.07);
-      border: 1px solid rgba(255,255,255,0.08);
-    }
-
-    .status {
-      margin-top: 16px;
-      border-radius: 14px;
-      padding: 14px 16px;
-      min-height: 48px;
-      background: rgba(110,168,254,0.12);
-      border: 1px solid rgba(110,168,254,0.22);
-      color: #dce8ff;
-    }
-
-    .status.success {
-      background: rgba(34,197,94,0.12);
-      border-color: rgba(34,197,94,0.25);
-      color: #dcffe8;
-    }
-
-    .status.warning {
-      background: rgba(245,158,11,0.12);
-      border-color: rgba(245,158,11,0.25);
-      color: #ffe9c7;
-    }
-
-    .status.error {
-      background: rgba(239,68,68,0.12);
-      border-color: rgba(239,68,68,0.25);
-      color: #ffd9d9;
-    }
-
-    .stat {
-      display: flex;
-      justify-content: space-between;
-      padding: 14px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-    }
-
-    .stat:last-child {
-      border-bottom: none;
-    }
-
-    .stat span {
-      color: var(--muted);
-    }
-
-    .result-card {
-      margin-top: 18px;
-      padding: 18px;
-      border-radius: 16px;
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.07);
-    }
-
-    .result-card h3 {
-      margin-top: 0;
-      margin-bottom: 12px;
-    }
-
-    .answer-text {
-      white-space: pre-wrap;
-      line-height: 1.7;
-    }
-
-    .sources-list {
-      display: grid;
-      gap: 10px;
-    }
-
-    .source-item {
-      padding: 12px 14px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.06);
-    }
-    .source-item.show-answer .flash-answer {
-      display: block !important;
-    }
-
-    .spinner {
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(255,255,255,0.25);
-      border-top-color: white;
-      border-radius: 50%;
-      display: inline-block;
-      animation: spin 0.7s linear infinite;
-      vertical-align: middle;
-      margin-right: 8px;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    @media (max-width: 900px) {
-      .grid, .row {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <div id="loginScreen" class="container" style="display:flex; align-items:center; justify-content:center; height:100vh;">
-  <div class="card" style="max-width:430px; width:100%;">
-    
-    <h2 style="margin-top:0;">OT Study Engine Login</h2>
-    <div class="sub">Create an account or log in to continue.</div>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
 
-    <label>Username</label>
-    <input id="usernameInput" type="text" placeholder="Enter username" />
-
-    <div style="height:14px;"></div>
-
-    <label>Password</label>
-    <input id="passwordInput" type="password" placeholder="Enter password" />
-
-    <div style="height:18px;"></div>
-
-    <div class="btn-row">
-      <button class="btn-primary" onclick="login()">Login</button>
-      <button class="btn-secondary" onclick="createAccount()">Create Account</button>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/" aria-label="OT AI Study Engine home">
+        <span class="brand-mark" aria-hidden="true">OT</span>
+        <span>AI Study Engine</span>
+      </a>
+      <div id="aiStatus" class="service-status" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        Checking service
+      </div>
     </div>
+  </header>
 
-    <div id="loginMessage" class="status" style="margin-top:16px;">No account yet? Create one first.</div>
-  </div>
-</div>
-  <div id="appScreen" style="display:none;">
-  <div class="container">
-    <h1>OT AI Study Engine</h1>
-    <div class="sub">Upload PDFs, ingest notes, and ask grounded questions from your own study material.</div>
-    <div class="btn-row" style="margin-bottom:20px;">
-  <button class="btn-secondary" onclick="logout()">Logout</button>
-</div>
-    <div class="card" style="margin-bottom:20px;">
-  <div class="section-title">How to use</div>
-  <p>1. Enter your OpenAI API key.</p>
-  <p>2. Upload a ZIP folder containing your PDF notes.</p>
-  <p>3. Click “Ingest PDFs” to index the notes.</p>
-  <p>4. Ask questions grounded only in your notes.</p>
-  <p>5. Generate flashcards by entering a topic or week tag.</p>
-</div>
+  <main id="workspace">
+    <section class="hero shell" aria-labelledby="heroTitle">
+      <div class="eyebrow">Source-grounded study workspace</div>
+      <h1 id="heroTitle">Turn dense notes into<br><span>clear revision material.</span></h1>
+      <p class="hero-copy">
+        Upload a ZIP of PDF notes, build a private study index, then ask questions
+        and generate flashcards grounded in your material.
+      </p>
+      <div class="trust-note">
+        <span aria-hidden="true">✓</span>
+        AI can make mistakes. Verify important answers against the cited pages.
+      </div>
+    </section>
 
-    <div class="grid">
-      <div class="card">
-        <div class="section-title">Setup</div>
+    <section class="shell steps" aria-label="Study workflow">
+      <div class="step active">
+        <span>1</span>
+        <div><strong>Upload</strong><small>Add PDF notes</small></div>
+      </div>
+      <div class="step-line" aria-hidden="true"></div>
+      <div class="step">
+        <span>2</span>
+        <div><strong>Index</strong><small>Prepare sources</small></div>
+      </div>
+      <div class="step-line" aria-hidden="true"></div>
+      <div class="step">
+        <span>3</span>
+        <div><strong>Study</strong><small>Ask and revise</small></div>
+      </div>
+    </section>
 
-        <label for="apiKey">OpenAI API Key</label>
-        <input id="apiKey" type="password" placeholder="sk-..." />
+    <section class="shell workspace-grid" aria-label="Document setup">
+      <article class="panel upload-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="kicker">Your material</p>
+            <h2>Add study notes</h2>
+          </div>
+          <span class="limit" id="uploadLimit">ZIP · PDF files</span>
+        </div>
 
-        <div style="height:18px;"></div>
-
-        <label>Upload ZIP of PDFs</label>
-        <label class="upload-box" id="dropZone" for="zipFile">
-          <strong>Drag and drop your ZIP here</strong>
-          <span>or click to choose a file</span>
-          <input id="zipFile" type="file" accept=".zip" class="hidden" />
-          <div id="fileName" class="file-pill hidden"></div>
+        <label class="drop-zone" id="dropZone" for="zipFile">
+          <span class="upload-icon" aria-hidden="true">↑</span>
+          <strong>Drop your ZIP here</strong>
+          <span>or choose a file from your device</span>
+          <input id="zipFile" type="file" accept=".zip,application/zip" class="visually-hidden">
+          <span id="fileName" class="file-pill" hidden></span>
         </label>
 
-        <div style="height:18px;"></div>
-
-        <div class="row">
-          <div>
-            <label for="tagFilter">Tag filter</label>
-            <input id="tagFilter" type="text" placeholder="e.g. week4" />
+        <div class="field-row">
+          <div class="field">
+            <label for="tagFilter">Topic tag <span>(optional)</span></label>
+            <input id="tagFilter" type="text" maxlength="32" placeholder="e.g. week4">
           </div>
-          <div>
-            <label for="mode">Mode</label>
+          <div class="field">
+            <label for="mode">Answer style</label>
             <select id="mode">
-              <option value="normal">normal</option>
-              <option value="exam">exam</option>
+              <option value="normal">Detailed</option>
+              <option value="exam">Exam mode</option>
             </select>
           </div>
         </div>
 
-        <div class="btn-row">
-          <button class="btn-primary" id="uploadBtn">Upload ZIP</button>
-          <button class="btn-secondary" id="ingestBtn">Ingest PDFs</button>
+        <details id="keyPanel" class="key-panel">
+          <summary>Use a development API key</summary>
+          <div class="field key-field">
+            <label for="apiKey">OpenAI API key</label>
+            <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Session only — never saved">
+            <small>This value stays in this browser tab and is never written to local storage.</small>
+          </div>
+        </details>
+
+        <div class="button-row">
+          <button class="button primary" id="uploadBtn" type="button">Upload ZIP</button>
+          <button class="button secondary" id="ingestBtn" type="button">Build study index</button>
         </div>
+        <div id="status" class="notice info" role="status" aria-live="polite">Choose a ZIP to begin.</div>
+      </article>
 
-        <div id="status" class="status">Ready.</div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">Session</div>
-        <div class="stat"><span>User bucket</span><strong id="userPreview">local browser user</strong></div>
-        <div class="stat"><span>Selected file</span><strong id="selectedFileText">None</strong></div>
-        <div class="stat"><span>Mode</span><strong id="modePreview">normal</strong></div>
-        <div class="stat"><span>Tag</span><strong id="tagPreview">none</strong></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">Ask</div>
-
-      <label for="question">Question</label>
-      <textarea id="question" placeholder="Ask something from your uploaded notes..."></textarea>
-
-      <div class="btn-row">
-        <button class="btn-primary" id="askBtn">Ask Question</button>
-      </div>
-
-      <div class="result-card">
-        <h3>Answer</h3>
-        <div id="answer" class="answer-text">Your answer will appear here.</div>
-      </div>
-
-      <div class="result-card">
-        <h3>Sources</h3>
-        <div id="sources" class="sources-list">
-          <div class="source-item">No sources yet.</div>
+      <aside class="panel library-panel" aria-labelledby="libraryTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="kicker">Current session</p>
+            <h2 id="libraryTitle">Study library</h2>
+          </div>
+          <button class="icon-button" id="refreshBtn" type="button" aria-label="Refresh library status">↻</button>
         </div>
-      </div>
-    </div>
-    <div class="card" style="margin-top:20px;">
-  <div class="section-title">Flashcards</div>
-
-  <label for="flashcardTopic">Topic</label>
-  <input id="flashcardTopic" type="text" placeholder="e.g. neural networks, cyber security, week 4..." />
-
-  <div class="btn-row">
-    <button class="btn-primary" id="flashcardBtn">Generate Flashcards</button>
-  </div>
-
-  <div id="flashcards" class="sources-list" style="margin-top:18px;">
-    <div class="source-item">No flashcards yet.</div>
-  </div> <!-- flashcards card -->
-  </div> <!-- container -->
-  </div> <!-- appScreen -->
-
-
-  <script>
-    const USER_ID_KEY = "ot_user_id";
-    const ACCOUNTS_KEY = "ot_accounts";
-    const API_KEY_STORAGE = "ot_api_key";
-
-    function getUserId() {
-      let id = localStorage.getItem(USER_ID_KEY);
-      if (!id) {
-        id = (crypto.randomUUID
-          ? crypto.randomUUID()
-          : (Date.now() + "-" + Math.random().toString(16).slice(2)));
-        localStorage.setItem(USER_ID_KEY, id);
-      }
-      return id;
-    }
-
-    const userId = getUserId();
-    const apiBase = "";
-
-    const apiKeyEl = document.getElementById("apiKey");
-    const zipFileEl = document.getElementById("zipFile");
-    const tagFilterEl = document.getElementById("tagFilter");
-
-    apiKeyEl.addEventListener("input", () => {
-      localStorage.setItem("ot_api_key", apiKeyEl.value.trim());
-    });
-    const modeEl = document.getElementById("mode");
-    const questionEl = document.getElementById("question");
-    const answerEl = document.getElementById("answer");
-    const sourcesEl = document.getElementById("sources");
-    const statusEl = document.getElementById("status");
-    const uploadBtn = document.getElementById("uploadBtn");
-    const ingestBtn = document.getElementById("ingestBtn");
-    const askBtn = document.getElementById("askBtn");
-    const fileNameEl = document.getElementById("fileName");
-    const dropZone = document.getElementById("dropZone");
-    const selectedFileText = document.getElementById("selectedFileText");
-    const modePreview = document.getElementById("modePreview");
-    const tagPreview = document.getElementById("tagPreview");
-    const userPreview = document.getElementById("userPreview");
-    const flashcardTopicEl = document.getElementById("flashcardTopic");
-    const flashcardBtn = document.getElementById("flashcardBtn");
-    const flashcardsEl = document.getElementById("flashcards");
-
-    function headersJson() {
-      const key = apiKeyEl.value.trim();
-      return {
-        "Content-Type": "application/json",
-        "Authorization": key ? ("Bearer " + key) : "",
-        "X-User": userId
-      };
-    }
-    function getAccounts() {
-  return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "{}");
-}
-
-function saveAccounts(accounts) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-}
-
-function showLoginMessage(message, type = "info") {
-  const box = document.getElementById("loginMessage");
-  box.className = `status ${type}`;
-  box.textContent = message;
-}
-
-function createAccount() {
-  const username = document.getElementById("usernameInput").value.trim();
-  const password = document.getElementById("passwordInput").value.trim();
-
-  if (!username || !password) {
-    showLoginMessage("Enter a username and password first.", "warning");
-    return;
-  }
-
-  const accounts = getAccounts();
-
-  if (accounts[username]) {
-    showLoginMessage("Account already exists. Try logging in.", "warning");
-    return;
-  }
-
-  accounts[username] = {
-    password,
-    userId: crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2)
-  };
-
-  saveAccounts(accounts);
-  showLoginMessage("Account created. Now click Login.", "success");
-}
-
-function login() {
-  const username = document.getElementById("usernameInput").value.trim();
-  const password = document.getElementById("passwordInput").value.trim();
-
-  const accounts = getAccounts();
-
-  if (!accounts[username] || accounts[username].password !== password) {
-    showLoginMessage("Wrong username or password.", "error");
-    return;
-  }
-
-  localStorage.setItem("ot_logged_in", "true");
-  localStorage.setItem(USER_ID_KEY, accounts[username].userId);
-
-  document.getElementById("loginScreen").style.display = "none";
-  document.getElementById("appScreen").style.display = "block";
-
-  updatePreview();
-}
-
-    function headersForm() {
-      const key = apiKeyEl.value.trim();
-      return {
-        "Authorization": key ? ("Bearer " + key) : "",
-        "X-User": userId
-      };
-    }
-
-    function setStatus(message, type = "info") {
-      statusEl.className = `status ${type}`;
-      statusEl.textContent = message;
-    }
-
-    function setLoading(button, loadingText) {
-      button.disabled = true;
-      button.dataset.original = button.innerHTML;
-      button.innerHTML = `<span class="spinner"></span>${loadingText}`;
-    }
-
-    function unsetLoading(button) {
-      button.disabled = false;
-      button.innerHTML = button.dataset.original || button.innerHTML;
-    }
-
-    function updatePreview() {
-      modePreview.textContent = modeEl.value || "normal";
-      tagPreview.textContent = tagFilterEl.value.trim() || "none";
-      selectedFileText.textContent = zipFileEl.files[0]?.name || "None";
-      userPreview.textContent = userId.slice(0, 8) + "...";
-    }
-
-    function renderSources(sources) {
-      if (!sources || !sources.length) {
-        sourcesEl.innerHTML = `<div class="source-item">No sources returned.</div>`;
-        return;
-      }
-
-      sourcesEl.innerHTML = sources
-        .map(source => `<div class="source-item">${source}</div>`)
-        .join("");
-    }
-
-    zipFileEl.addEventListener("change", () => {
-      const file = zipFileEl.files[0];
-      updatePreview();
-
-      if (file) {
-        fileNameEl.classList.remove("hidden");
-        fileNameEl.textContent = file.name;
-      } else {
-        fileNameEl.classList.add("hidden");
-        fileNameEl.textContent = "";
-      }
-    });
-
-    modeEl.addEventListener("change", updatePreview);
-    tagFilterEl.addEventListener("input", updatePreview);
-
-    ["dragenter", "dragover"].forEach(eventName => {
-      dropZone.addEventListener(eventName, e => {
-        e.preventDefault();
-        dropZone.classList.add("dragover");
-      });
-    });
-
-    ["dragleave", "drop"].forEach(eventName => {
-      dropZone.addEventListener(eventName, e => {
-        e.preventDefault();
-        dropZone.classList.remove("dragover");
-      });
-    });
-
-    dropZone.addEventListener("drop", e => {
-      const files = e.dataTransfer.files;
-      if (files.length) {
-        zipFileEl.files = files;
-        zipFileEl.dispatchEvent(new Event("change"));
-      }
-    });
-
-    uploadBtn.addEventListener("click", async () => {
-      const file = zipFileEl.files[0];
-      const apiKey = apiKeyEl.value.trim();
-
-      if (!apiKey) {
-        setStatus("Enter your OpenAI API key first.", "warning");
-        return;
-      }
-
-      if (!file) {
-        setStatus("Choose a ZIP file first.", "warning");
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("file", file);
-
-      try {
-        setLoading(uploadBtn, "Uploading...");
-        setStatus("Uploading ZIP file...", "info");
-
-        const res = await fetch(apiBase + "/upload_zip", {
-          method: "POST",
-          headers: headersForm(),
-          body: formData
-        });
-
-        const text = await res.text();
-
-        if (!res.ok) {
-          throw new Error(text || "Upload failed");
-        }
-
-        setStatus("ZIP uploaded successfully. You can ingest it now.", "success");
-      } catch (err) {
-        setStatus(`Upload failed: ${err.message}`, "error");
-      } finally {
-        unsetLoading(uploadBtn);
-      }
-    });
-
-    ingestBtn.addEventListener("click", async () => {
-      const apiKey = apiKeyEl.value.trim();
-      const tag = tagFilterEl.value.trim();
-
-      if (!apiKey) {
-        setStatus("Enter your OpenAI API key first.", "warning");
-        return;
-      }
-
-      try {
-        setLoading(ingestBtn, "Ingesting...");
-        setStatus("Extracting and ingesting PDFs...", "info");
-
-        const res = await fetch(apiBase + "/ingest_user_pdfs", {
-          method: "POST",
-          headers: headersJson(),
-          body: JSON.stringify({ tag: tag || null })
-        });
-
-        const text = await res.text();
-
-        if (!res.ok) {
-          throw new Error(text || "Ingest failed");
-        }
-
-        setStatus("PDFs ingested successfully.", "success");
-      } catch (err) {
-        setStatus(`Ingest failed: ${err.message}`, "error");
-      } finally {
-        unsetLoading(ingestBtn);
-      }
-    });
-
-    askBtn.addEventListener("click", async () => {
-      const apiKey = apiKeyEl.value.trim();
-      const question = questionEl.value.trim();
-      const mode = modeEl.value;
-      const tag = tagFilterEl.value.trim();
-
-      if (!apiKey) {
-        setStatus("Enter your OpenAI API key first.", "warning");
-        return;
-      }
-
-      if (!question) {
-        setStatus("Type a question first.", "warning");
-        return;
-      }
-
-      try {
-        setLoading(askBtn, "Thinking...");
-        answerEl.textContent = "Thinking...";
-        renderSources([]);
-        setStatus("Generating answer from your notes...", "info");
-
-        const res = await fetch(apiBase + "/chat", {
-          method: "POST",
-          headers: headersJson(),
-          body: JSON.stringify({
-            question,
-            tag: tag || null,
-            mode
-          })
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.detail || "Question failed");
-        }
-
-        answerEl.textContent = data.answer || "No answer returned.";
-        renderSources(data.sources || []);
-        setStatus("Answer generated.", "success");
-      } catch (err) {
-        answerEl.textContent = "Something went wrong.";
-        renderSources([]);
-        setStatus(`Ask failed: ${err.message}`, "error");
-      } finally {
-        unsetLoading(askBtn);
-      }
-    });
-    function renderFlashcards(cards) {
-  if (!cards || !cards.length) {
-    flashcardsEl.innerHTML = `<div class="source-item">No flashcards generated.</div>`;
-    return;
-  }
-
-  flashcardsEl.innerHTML = cards.map((card, index) => `
-    <div class="source-item" onclick="this.classList.toggle('show-answer')" style="cursor:pointer;">
-      <strong>Q${index + 1}: ${card.question}</strong>
-      <div class="flash-answer" style="display:none; margin-top:10px; color:var(--muted);">
-        ${card.answer}
-      </div>
-    </div>
-  `).join("");
-}
-
-flashcardBtn.addEventListener("click", async () => {
-  const apiKey = apiKeyEl.value.trim();
-  const topic = flashcardTopicEl.value.trim();
-  const tag = tagFilterEl.value.trim();
-
-  if (!apiKey) {
-    setStatus("Enter your OpenAI API key first.", "warning");
-    return;
-  }
-
-  if (!topic) {
-    setStatus("Type a flashcard topic first.", "warning");
-    return;
-  }
-
-  try {
-    setLoading(flashcardBtn, "Generating...");
-    flashcardsEl.innerHTML = `<div class="source-item">Generating flashcards...</div>`;
-    setStatus("Generating flashcards from your notes...", "info");
-
-    const res = await fetch(apiBase + "/flashcards", {
-      method: "POST",
-      headers: headersJson(),
-      body: JSON.stringify({
-        topic,
-        tag: tag || null
-      })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.detail || "Flashcards failed");
-    }
-
-    renderFlashcards(data.flashcards || []);
-    setStatus("Flashcards generated.", "success");
-  } catch (err) {
-    flashcardsEl.innerHTML = `<div class="source-item">Something went wrong.</div>`;
-    setStatus(`Flashcards failed: ${err.message}`, "error");
-  } finally {
-    unsetLoading(flashcardBtn);
-  }
-});
-function logout() {
-  localStorage.removeItem("ot_logged_in");
-  localStorage.removeItem("ot_api_key");
-
-  apiKeyEl.value = "";
-
-  document.getElementById("appScreen").style.display = "none";
-  document.getElementById("loginScreen").style.display = "flex";
-}
-
-    updatePreview();
-    window.onload = () => {
-      const saved = localStorage.getItem("ot_logged_in");
-    const savedApiKey = localStorage.getItem("ot_api_key");
-    if (savedApiKey) {
-    apiKeyEl.value = savedApiKey;
-    }
-
-      if (saved) {
-        document.getElementById("loginScreen").style.display = "none";
-        document.getElementById("appScreen").style.display = "block";
-      } else {
-        document.getElementById("loginScreen").style.display = "flex";
-        document.getElementById("appScreen").style.display = "none";
-      }
-};
-  </script>
+        <div class="metric-grid">
+          <div class="metric"><strong id="documentCount">0</strong><span>Documents</span></div>
+          <div class="metric"><strong id="chunkCount">0</strong><span>Note sections</span></div>
+        </div>
+        <div class="session-list">
+          <div><span>Index</span><strong id="indexState">Not ready</strong></div>
+          <div><span>Tags</span><strong id="tagSummary">None yet</strong></div>
+          <div><span>Session</span><strong id="sessionPreview">Loading…</strong></div>
+        </div>
+        <p class="privacy-copy">
+          Uploaded files are stored by this server. On Render’s default filesystem,
+          they may disappear after a restart or deployment.
+        </p>
+      </aside>
+    </section>
+
+    <section class="shell study-grid" aria-label="Study tools">
+      <article class="panel ask-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="kicker">Grounded Q&amp;A</p>
+            <h2>Ask your notes</h2>
+          </div>
+        </div>
+        <div class="field">
+          <label for="question">Question</label>
+          <textarea id="question" maxlength="2000" placeholder="Explain the main concept from week 4…"></textarea>
+        </div>
+        <div class="button-row compact">
+          <button class="button primary" id="askBtn" type="button">Generate answer</button>
+          <button class="button text-button" id="copyAnswerBtn" type="button" disabled>Copy answer</button>
+        </div>
+        <div class="output" aria-live="polite">
+          <div class="output-heading"><h3>Answer</h3><span id="answerBadge">Waiting</span></div>
+          <div id="answer" class="answer-text empty">Your grounded answer will appear here.</div>
+        </div>
+        <div class="sources-block">
+          <h3>Sources</h3>
+          <div id="sources" class="source-list"><p class="empty-copy">No sources yet.</p></div>
+        </div>
+      </article>
+
+      <article class="panel flashcard-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="kicker">Active recall</p>
+            <h2>Revision flashcards</h2>
+          </div>
+        </div>
+        <div class="field">
+          <label for="flashcardTopic">Topic or week</label>
+          <input id="flashcardTopic" type="text" maxlength="500" placeholder="e.g. neural networks or week4">
+        </div>
+        <div class="button-row compact">
+          <button class="button primary" id="flashcardBtn" type="button">Create 6 cards</button>
+        </div>
+        <div id="flashcards" class="flashcard-list" aria-live="polite">
+          <p class="empty-copy">Generated cards will appear here.</p>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="shell footer">
+    <span>OT AI Study Engine</span>
+    <span>Designed for grounded revision, not a substitute for source material.</span>
+  </footer>
 </body>
 </html>
