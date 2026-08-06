@@ -1,16 +1,20 @@
+import json
 import os
 import re
-import json
 import shlex
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Optional
 
-import numpy as np
 import faiss
+import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
 from pypdf import PdfReader
+
+try:
+    from .ai_service import EMBEDDING_MODEL, create_openai_client
+except ImportError:  # Supports the optional `python core.py` CLI workflow.
+    from ai_service import EMBEDDING_MODEL, create_openai_client
 
 # -----------------------
 # Setup
@@ -29,7 +33,7 @@ RULES:
 # Helpers
 # -----------------------
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def chunk_text(text: str, max_chars: int = 900) -> list[str]:
@@ -44,13 +48,23 @@ def chunk_text(text: str, max_chars: int = 900) -> list[str]:
     return chunks
 
 
-def read_pdf_pages(path: str) -> list[tuple[int, str]]:
+def read_pdf_pages(
+    path: str,
+    max_pages: int | None = None,
+    max_chars: int | None = None,
+) -> list[tuple[int, str]]:
     """Returns list of (page_number_1based, text)."""
     reader = PdfReader(path)
+    if max_pages is not None and len(reader.pages) > max_pages:
+        raise ValueError(f"PDF exceeds the {max_pages}-page limit")
     out: list[tuple[int, str]] = []
+    total_chars = 0
     for i, page in enumerate(reader.pages, start=1):
         t = (page.extract_text() or "").strip()
         if t:
+            total_chars += len(t)
+            if max_chars is not None and total_chars > max_chars:
+                raise ValueError("PDF contains too much extractable text")
             out.append((i, t))
     return out
 
@@ -83,7 +97,7 @@ def safe_remove(path: str):
         pass
 
 
-def get_openai_client(api_key: Optional[str] = None) -> OpenAI:
+def get_openai_client(api_key: str | None = None) -> OpenAI:
     """
     Server mode: pass api_key from header.
     CLI mode: leave None and it uses OPENAI_API_KEY from .env.
@@ -94,14 +108,14 @@ def get_openai_client(api_key: Optional[str] = None) -> OpenAI:
             "No OpenAI API key found. Set OPENAI_API_KEY in your .env (CLI) "
             "or pass api_key in server requests (Bearer token)."
         )
-    return OpenAI(api_key=key)
+    return create_openai_client(key)
 
 
 # -----------------------
 # Embeddings + FAISS store (PER USER)
 # -----------------------
 class NoteStore:
-    def __init__(self, base_path: Path, api_key: Optional[str] = None):
+    def __init__(self, base_path: Path, api_key: str | None = None):
         # where THIS user's data lives (backend/users/<id>/data)
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -114,21 +128,21 @@ class NoteStore:
 
         # OpenAI client (optional, can be supplied later)
         self._api_key = api_key
-        self._client: Optional[OpenAI] = None
+        self._client: OpenAI | None = None
 
         # in-memory data
         self.chunks: list[str] = []
         self.tags: list[str] = []
         self.meta: list[dict] = []  # {"source": "...", "page": 1, "is_gold": bool}
         self.index = None
-        self.dim: Optional[int] = None
+        self.dim: int | None = None
 
     # ---------- per-user stats + history ----------
     def load_stats(self) -> dict:
         if not self.stats_path.exists():
             return {}
         try:
-            with open(self.stats_path, "r", encoding="utf-8") as f:
+            with open(self.stats_path, encoding="utf-8") as f:
                 data = json.load(f)
             return data if isinstance(data, dict) else {}
         except Exception:
@@ -156,8 +170,12 @@ class NoteStore:
 
     def _embed(self, texts: list[str]) -> np.ndarray:
         client = self._get_client()
-        resp = client.embeddings.create(model="text-embedding-3-small", input=texts)
-        return np.array([d.embedding for d in resp.data], dtype="float32")
+        embeddings: list[list[float]] = []
+        for start in range(0, len(texts), 64):
+            batch = texts[start : start + 64]
+            response = client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
+            embeddings.extend(item.embedding for item in response.data)
+        return np.array(embeddings, dtype="float32")
 
     # ---------- add / search ----------
     def add_chunks(self, chunks: list[str], tag: str, meta_list: list[dict]):
@@ -218,7 +236,7 @@ class NoteStore:
         scores, idxs = self.index.search(qv, widen)
 
         results = []
-        for score, i in zip(scores[0], idxs[0]):
+        for score, i in zip(scores[0], idxs[0], strict=True):
             if i == -1:
                 continue
             i = int(i)
@@ -252,7 +270,7 @@ class NoteStore:
 
         self.index = faiss.read_index(str(self.faiss_path))
 
-        with open(self.chunks_path, "r", encoding="utf-8") as f:
+        with open(self.chunks_path, encoding="utf-8") as f:
             payload = json.load(f)
 
         self.chunks = payload.get("chunks", [])
@@ -281,7 +299,7 @@ class NoteStore:
 # -----------------------
 # App (factory)
 # -----------------------
-def get_store_for_user(user_id: str, api_key: Optional[str] = None) -> NoteStore:
+def get_store_for_user(user_id: str, api_key: str | None = None) -> NoteStore:
     user_data_path = Path(__file__).parent / "users" / user_id / "data"
     user_data_path.mkdir(parents=True, exist_ok=True)
 
@@ -301,9 +319,6 @@ def chat():
     last_hit_ids: list[int] = []
     last_sources: list[str] = []
     last_question: str | None = None
-    last_answer: str | None = None
-    last_tag_filter: str | None = None
-    last_top_score: float | None = None
 
     # tuning knobs
     FEEDBACK_ALPHA = 0.15
@@ -341,11 +356,11 @@ def chat():
         cmd = parts[0].lower()
         is_command = cmd.startswith("/")
 
-        def get_flag_value(flag: str, default=None):
-            if flag in parts:
-                i = parts.index(flag)
-                if i + 1 < len(parts):
-                    return parts[i + 1]
+        def get_flag_value(flag: str, default=None, command_parts=parts):
+            if flag in command_parts:
+                i = command_parts.index(flag)
+                if i + 1 < len(command_parts):
+                    return command_parts[i + 1]
             return default
 
         # -----------------------
@@ -380,9 +395,6 @@ def chat():
             last_hit_ids = []
             last_sources = []
             last_question = None
-            last_answer = None
-            last_tag_filter = None
-            last_top_score = None
 
             print("🧹 Notes cleared (memory + saved files). Stats cleared.\n")
             store.log_event({"type": "clear", "ts": now_iso()})
@@ -479,7 +491,15 @@ def chat():
             store.save()
             print(f"✅ Added PDF: {filename}\n")
 
-            store.log_event({"type": "add_pdf", "ts": now_iso(), "tag": tag, "file": filename, "pages": len(pages)})
+            store.log_event(
+                {
+                    "type": "add_pdf",
+                    "ts": now_iso(),
+                    "tag": tag,
+                    "file": filename,
+                    "pages": len(pages),
+                }
+            )
             continue
 
         if is_command and cmd == "/addfolder":
@@ -557,9 +577,9 @@ def chat():
             print("\nAssistant: Not found in your notes.\n")
             continue
 
-        def adjusted_score(hit):
+        def adjusted_score(hit, current_stats=stats):
             cid, score, _chunk, meta = hit
-            fb = stats.get(str(cid), {"good": 0, "bad": 0})
+            fb = current_stats.get(str(cid), {"good": 0, "bad": 0})
             w = fb["good"] - fb["bad"]
             adj = score + FEEDBACK_ALPHA * w
             if meta.get("is_gold"):
@@ -584,9 +604,6 @@ def chat():
             continue
 
         last_hit_ids = [cid for cid, _score, _chunk, _meta in hits]
-        last_tag_filter = tag_filter
-        last_top_score = top_score
-
         context = "\n\n---\n\n".join([chunk for _cid, _score, chunk, _meta in hits])
 
         sources = []
@@ -618,7 +635,6 @@ def chat():
 
         if answer_text.lower() == "not found in your notes.":
             last_question = question
-            last_answer = answer_text
             last_sources = []
             print("\nAssistant: Not found in your notes.\n")
             store.log_event(
@@ -635,7 +651,6 @@ def chat():
             continue
 
         last_question = question
-        last_answer = answer_text
         last_sources = sorted(set(sources))
 
         print(f"\nAssistant: {answer_text}\n")

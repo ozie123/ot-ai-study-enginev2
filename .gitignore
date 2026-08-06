@@ -1,6 +1,13 @@
 backend/users/
 backend/.env
 .env
+.env.local
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+output/
 __pycache__/
 *.pyc
-.venv/ 
+*.tmp
