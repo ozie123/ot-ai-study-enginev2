@@ -14,7 +14,7 @@ from pypdf import PdfReader
 try:
     from .ai_service import EMBEDDING_MODEL, create_openai_client
 except ImportError:  # Supports the optional `python core.py` CLI workflow.
-    from ai_service import EMBEDDING_MODEL, create_openai_client
+    from ai_service import EMBEDDING_MODEL, create_openai_client  # type: ignore[no-redef]
 
 # -----------------------
 # Setup
@@ -134,7 +134,7 @@ class NoteStore:
         self.chunks: list[str] = []
         self.tags: list[str] = []
         self.meta: list[dict] = []  # {"source": "...", "page": 1, "is_gold": bool}
-        self.index = None
+        self.index: faiss.Index | None = None
         self.dim: int | None = None
 
     # ---------- per-user stats + history ----------

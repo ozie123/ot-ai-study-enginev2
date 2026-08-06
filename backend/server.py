@@ -34,7 +34,7 @@ try:
     )
     from .core import NoteStore, chunk_text, infer_tag_from_filename, read_pdf_pages
 except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
-    from ai_service import (
+    from ai_service import (  # type: ignore[no-redef]
         EMBEDDING_MODEL,
         RESPONSE_MODEL,
         create_openai_client,
@@ -43,7 +43,12 @@ except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
         raise_openai_http_error,
         resolve_api_key,
     )
-    from core import NoteStore, chunk_text, infer_tag_from_filename, read_pdf_pages
+    from core import (  # type: ignore[no-redef]
+        NoteStore,
+        chunk_text,
+        infer_tag_from_filename,
+        read_pdf_pages,
+    )
 
 
 APP_VERSION = "1.1.0"
@@ -229,14 +234,15 @@ def load_store_for_user(user_id: str, api_key: str | None = None) -> NoteStore:
 
     if paths["faiss"].exists() and paths["chunks"].exists():
         try:
-            store.index = faiss.read_index(str(paths["faiss"]))
+            index = faiss.read_index(str(paths["faiss"]))
+            store.index = index
             with paths["chunks"].open("r", encoding="utf-8") as file_handle:
                 payload = json.load(file_handle)
             store.chunks = payload.get("chunks", [])
             store.tags = payload.get("tags", ["untagged"] * len(store.chunks))
             store.meta = payload.get("meta", [{}] * len(store.chunks))
             store.dim = payload.get("dim")
-            if not (len(store.chunks) == len(store.tags) == len(store.meta) == store.index.ntotal):
+            if not (len(store.chunks) == len(store.tags) == len(store.meta) == index.ntotal):
                 raise ValueError("Study index files are inconsistent")
         except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
             logger.error("study_index_load_failed user_id=%s", user_id)

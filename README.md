@@ -170,6 +170,7 @@ The SDK is configured for a 45-second timeout and one retry. Output-token limits
 ```bash
 python -m pytest -q
 python -m ruff check backend tests
+python -m mypy backend
 node --check frontend/app.js
 python -m pip_audit -r backend/requirements.txt
 python -m compileall -q backend
