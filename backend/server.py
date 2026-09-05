@@ -360,8 +360,11 @@ def extract_valid_pdfs(content: bytes) -> list[tuple[str, bytes]]:
                 raise HTTPException(status_code=400, detail="ZIP contains duplicate PDF filenames.")
             seen_names.add(normalized)
 
-            with archive.open(member) as source:
-                pdf_bytes = source.read(MAX_PDF_BYTES + 1)
+            try:
+                with archive.open(member) as source:
+                    pdf_bytes = source.read(MAX_PDF_BYTES + 1)
+            except (zipfile.BadZipFile, EOFError, OSError) as error:
+                raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.") from error
             if len(pdf_bytes) > MAX_PDF_BYTES:
                 raise HTTPException(
                     status_code=413, detail="A PDF exceeds the per-file size limit."
@@ -578,6 +581,7 @@ def chat_api(
 
     if not store.chunks:
         return {
+            "status": "not_ready",
             "answer": "No notes have been ingested yet. Upload and ingest PDFs first.",
             "sources": [],
         }
@@ -600,7 +604,7 @@ def chat_api(
     except Exception as error:
         raise_openai_http_error(error)
     if not hits:
-        return {"answer": "Not found in your notes.", "sources": []}
+        return {"status": "not_found", "answer": "Not found in your notes.", "sources": []}
 
     context = "\n\n---\n\n".join(hit[2] for hit in hits)
     try:
@@ -612,7 +616,9 @@ def chat_api(
         )
     except Exception as error:
         raise_openai_http_error(error)
-    return {"answer": answer, "sources": build_sources(hits)}
+    if answer.strip().casefold() == "not found in your notes.":
+        return {"status": "not_found", "answer": answer, "sources": []}
+    return {"status": "answered", "answer": answer, "sources": build_sources(hits)}
 
 
 @app.post("/flashcards")
