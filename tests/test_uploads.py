@@ -35,6 +35,18 @@ def test_invalid_zip_is_rejected(client):
     assert response.json()["detail"] == "Invalid ZIP file."
 
 
+def test_corrupt_zip_member_is_rejected_with_controlled_error(client):
+    content = bytearray(make_zip({"notes.pdf": b"%PDF-1.4\nmock"}, compression=zipfile.ZIP_STORED))
+    marker = content.find(b"%PDF-1.4\nmock")
+    assert marker >= 0
+    content[marker + len(b"%PDF-1.4\nmock") - 1] ^= 0x01
+
+    response = post_zip(client, bytes(content))
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid or corrupt ZIP file."
+
+
 def test_disguised_non_pdf_is_rejected(client):
     response = post_zip(client, make_zip({"notes.pdf": b"plain text"}))
     assert response.status_code == 400

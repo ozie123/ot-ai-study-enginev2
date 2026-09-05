@@ -11,8 +11,13 @@ import os
 from typing import Any, NoReturn
 
 import openai
+from dotenv import load_dotenv
 from fastapi import HTTPException
 from openai import OpenAI
+
+# Resolve local settings before the module-level provider configuration.
+# Exported environment variables keep precedence because override=False.
+load_dotenv()
 
 
 def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
@@ -169,6 +174,9 @@ FLASHCARD_SCHEMA: dict[str, Any] = {
 
 
 def _response_text(response: Any) -> str:
+    status = getattr(response, "status", None)
+    if status not in (None, "completed"):
+        raise InvalidAIResponseError(f"Response status was {status!r}")
     text = getattr(response, "output_text", "")
     if not isinstance(text, str) or not text.strip():
         raise InvalidAIResponseError("Missing output_text")

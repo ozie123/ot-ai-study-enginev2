@@ -325,10 +325,15 @@ elements.askBtn.addEventListener("click", async () => {
     });
     elements.answer.className = "answer-text";
     elements.answer.textContent = data.answer || "No answer was returned.";
-    elements.answerBadge.textContent = data.sources?.length ? "Grounded" : "No match";
+    const answerStates = {
+      answered: "Sources retrieved",
+      not_found: "Not found",
+      not_ready: "Not ready",
+    };
+    elements.answerBadge.textContent = answerStates[data.status] || "Unknown";
     elements.copyAnswerBtn.disabled = !data.answer;
     renderSources(data.sources || []);
-    setNotice("Answer generated. Check the cited pages for important details.", "success");
+    setNotice("Answer generated. Review the retrieved pages for important details.", "success");
   } catch (error) {
     elements.answer.className = "answer-text empty";
     elements.answer.textContent = "The answer could not be generated. Your notes are still available.";

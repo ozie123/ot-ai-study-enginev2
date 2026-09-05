@@ -7,7 +7,6 @@ from pathlib import Path
 
 import faiss
 import numpy as np
-from dotenv import load_dotenv
 from openai import OpenAI
 from pypdf import PdfReader
 
@@ -19,8 +18,6 @@ except ImportError:  # Supports the optional `python core.py` CLI workflow.
 # -----------------------
 # Setup
 # -----------------------
-load_dotenv()
-
 SYSTEM = """You are a study assistant.
 RULES:
 - If NOTES are provided, answer ONLY using the notes context.

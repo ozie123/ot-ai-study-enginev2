@@ -17,3 +17,11 @@ def test_frontend_has_accessible_controls_and_ai_warning():
     assert 'aria-live="polite"' in html
     assert "AI can make mistakes" in html
     assert '<script src="/static/app.js" defer></script>' in html
+
+
+def test_frontend_uses_truthful_answer_states():
+    javascript = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert 'answered: "Sources retrieved"' in javascript
+    assert 'not_found: "Not found"' in javascript
+    assert 'not_ready: "Not ready"' in javascript
+    assert '"Grounded"' not in javascript
