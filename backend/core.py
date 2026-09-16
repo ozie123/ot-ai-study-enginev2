@@ -222,15 +222,37 @@ class NoteStore:
         Returns list of (chunk_id, score, chunk_text, meta)
         score is cosine similarity (since vectors are normalized)
         """
-        if self.index is None or not self.chunks:
+        if self.index is None or not self.chunks or k <= 0:
             return []
 
-        widen = widen or max(k * 10, 20)
+        # Filter before ranking: a small global shortlist can omit every
+        # matching chunk even though the requested tag exists in the index.
+        scoped_ids = None
+        if tag is not None:
+            scoped_ids = [i for i, value in enumerate(self.tags) if value == tag]
+            if not scoped_ids:
+                return []
 
         qv = self._embed([query])
         faiss.normalize_L2(qv)
 
-        scores, idxs = self.index.search(qv, widen)
+        if scoped_ids is not None:
+            vectors = np.array(
+                [self.index.reconstruct(i) for i in scoped_ids], dtype="float32"
+            )
+            scoped_scores = vectors @ qv[0]
+            order = np.argsort(-scoped_scores, kind="stable")[:k]
+            return [
+                (
+                    scoped_ids[position],
+                    float(scoped_scores[position]),
+                    self.chunks[scoped_ids[position]],
+                    self.meta[scoped_ids[position]],
+                )
+                for position in order
+            ]
+
+        scores, idxs = self.index.search(qv, min(max(k, widen or k), len(self.chunks)))
 
         results = []
         for score, i in zip(scores[0], idxs[0], strict=True):

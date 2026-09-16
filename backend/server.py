@@ -287,10 +287,8 @@ def build_sources(hits) -> list[str]:
 
 
 def select_hits(store: NoteStore, query: str, *, k: int, tag: str | None):
-    hits = store.search(query, k=k, tag=tag)
-    if not hits and tag:
-        hits = store.search(query, k=k, tag=None)
-    return hits
+    # An explicit study scope must never fall back to unrelated notes.
+    return store.search(query, k=k, tag=tag)
 
 
 async def read_upload_limited(file: UploadFile) -> bytes:
@@ -596,9 +594,7 @@ def chat_api(
         "recap",
     )
     is_summary = any(term in payload.question.lower() for term in summary_terms)
-    query = (
-        "main concepts definitions examples key points overview" if is_summary else payload.question
-    )
+    query = payload.question
     try:
         hits = select_hits(store, query, k=8 if is_summary else 4, tag=tag)
     except Exception as error:
@@ -637,8 +633,8 @@ def flashcards_api(
 
     topic = payload.topic.strip()
     query = topic
-    if topic.lower().startswith("week"):
-        tag = validate_tag(topic.lower().replace(" ", ""))
+    if tag is None and re.fullmatch(r"week\s*\d{1,2}", topic, flags=re.IGNORECASE):
+        tag = validate_tag(re.sub(r"\s+", "", topic.lower()))
         query = "main concepts definitions examples key points overview"
     try:
         hits = select_hits(store, query, k=8, tag=tag)

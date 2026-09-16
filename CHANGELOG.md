@@ -1,5 +1,15 @@
 # Changelog
 
+## Scoped retrieval — Unreleased
+
+- Rank all chunks in the selected tag before choosing results, so matching notes are not lost behind unrelated global search results.
+- Keep chat and flashcard retrieval inside an explicitly selected tag; return no match instead of silently searching other tags.
+- Preserve the requested topic when retrieving notes for summaries.
+- Honor explicit flashcard tags and only infer a week tag from a standalone week label.
+- Add regression coverage for deep-ranked matches, missing tags, original source IDs, summary topics, and flashcard scope.
+
+This batch does not resolve authentication, transactional index persistence, document replacement, or durable storage.
+
 ## 1.1.0 — Unreleased
 
 ### Security
