@@ -31,6 +31,7 @@ jobs:
       - run: python -m ruff check backend tests
       - run: python -m mypy backend
       - run: node --check frontend/app.js
+      - run: node --test tests/frontend/*.test.mjs
       - run: python -m compileall -q backend
 
   dependency-audit:

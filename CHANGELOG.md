@@ -1,5 +1,15 @@
 # Changelog
 
+## Secure anonymous sessions — Unreleased
+
+- Replace client-controlled X-User ownership with random server-issued cookies and persistent hashed session records.
+- Enforce ownership across status, upload, ingestion, chat, and flashcards.
+- Add 30-day absolute expiry, revocation, HTTPS host-bound HttpOnly cookies, no-store responses, and same-origin write checks.
+- Initialize the browser session before study requests and remove legacy local IDs.
+- Leave legacy files intact but require re-upload; arbitrary IDs cannot claim old notes.
+- Add session isolation, forged-cookie, expiry, persistence, revocation, and CSRF regressions.
+- User accounts, recovery, rate limiting, and transactional indexing remain separate work.
+
 ## Scoped retrieval — Unreleased
 
 - Rank all chunks in the selected tag before choosing results, so matching notes are not lost behind unrelated global search results.

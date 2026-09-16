@@ -24,7 +24,7 @@ def test_public_config_does_not_expose_a_key(client):
 def test_missing_api_key_is_clear_and_safe(client):
     response = client.post(
         "/chat",
-        headers={"X-User": "test-user"},
+        headers={},
         json={"question": "What is occupational therapy?", "mode": "normal"},
     )
     assert response.status_code == 503
@@ -42,7 +42,7 @@ def test_path_traversal_user_id_is_rejected(client, tmp_path):
 def test_request_validation_rejects_unknown_fields(client):
     response = client.post(
         "/chat",
-        headers={"X-User": "test-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"question": "Hello", "mode": "normal", "unexpected": True},
     )
     assert response.status_code == 422

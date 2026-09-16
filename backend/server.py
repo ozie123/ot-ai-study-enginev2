@@ -16,13 +16,14 @@ from pathlib import Path
 from typing import Literal
 
 import faiss
-from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
+    from . import sessions
     from .ai_service import (
         EMBEDDING_MODEL,
         RESPONSE_MODEL,
@@ -34,6 +35,7 @@ try:
     )
     from .core import NoteStore, chunk_text, infer_tag_from_filename, read_pdf_pages
 except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
+    import sessions  # type: ignore[no-redef]
     from ai_service import (  # type: ignore[no-redef]
         EMBEDDING_MODEL,
         RESPONSE_MODEL,
@@ -94,7 +96,10 @@ MAX_INGEST_CHUNKS = _env_int("MAX_INGEST_CHUNKS", 2500, minimum=1, maximum=10_00
 MAX_COMPRESSION_RATIO = 100
 READ_CHUNK_BYTES = 1024 * 1024
 
-USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+SESSION_COOKIE_SECURE = os.getenv("OT_SESSION_COOKIE_SECURE", "true").lower()
+if SESSION_COOKIE_SECURE not in {"true", "false"}:
+    raise RuntimeError("OT_SESSION_COOKIE_SECURE must be true or false")
+SESSION_COOKIE_NAME = "__Host-ot_session" if SESSION_COOKIE_SECURE == "true" else "ot_session_dev"
 TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 
 logger = logging.getLogger("ot_ai_study_engine")
@@ -138,7 +143,7 @@ if allowed_origins:
         allow_origins=allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type", "X-User", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
@@ -154,6 +159,15 @@ async def add_security_and_request_headers(request: Request, call_next):
     )
     started = time.monotonic()
     response = await call_next(request)
+    if request.url.path in {
+        "/session",
+        "/status",
+        "/upload_zip",
+        "/ingest_user_pdfs",
+        "/chat",
+        "/flashcards",
+    }:
+        response.headers["Cache-Control"] = "no-store"
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -187,11 +201,52 @@ def user_lock(user_id: str) -> Iterator[None]:
         yield
 
 
-def get_user_id(x_user: str | None) -> str:
-    user_id = (x_user or "local-default").strip()
-    if not USER_ID_PATTERN.fullmatch(user_id):
-        raise HTTPException(status_code=400, detail="Invalid X-User identifier.")
-    return user_id
+def get_user_id(request: Request) -> str:
+    if "x-user" in request.headers:
+        raise HTTPException(400, "X-User is no longer supported. Start a browser session.")
+    session = sessions.lookup(USERS_DIR, request.cookies.get(SESSION_COOKIE_NAME))
+    if session is None:
+        raise HTTPException(
+            401, "Study session missing or expired. Refresh to start a new session."
+        )
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        sessions.require_same_origin_write(request)
+    return session[0]
+
+
+@app.post("/session")
+def start_session(request: Request, response: Response):
+    sessions.require_same_origin_write(request)
+    if "x-user" in request.headers:
+        raise HTTPException(400, "Legacy study identifiers cannot claim a session.")
+    existing = sessions.lookup(USERS_DIR, request.cookies.get(SESSION_COOKIE_NAME))
+    if existing:
+        user_id, expires_at = existing
+    else:
+        token, user_id, expires_at = sessions.create(USERS_DIR)
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token,
+            max_age=sessions.SESSION_SECONDS,
+            httponly=True,
+            secure=SESSION_COOKIE_SECURE == "true",
+            samesite="strict",
+            path="/",
+        )
+    return {"session_label": user_id[:10], "expires_at": expires_at}
+
+
+@app.delete("/session")
+def end_session(request: Request, response: Response, user_id: str = Depends(get_user_id)):
+    sessions.revoke(USERS_DIR, request.cookies[SESSION_COOKIE_NAME])
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE == "true",
+        samesite="strict",
+    )
+    return {"ended": True}
 
 
 def validate_tag(tag: str | None) -> str | None:
@@ -362,7 +417,9 @@ def extract_valid_pdfs(content: bytes) -> list[tuple[str, bytes]]:
                 with archive.open(member) as source:
                     pdf_bytes = source.read(MAX_PDF_BYTES + 1)
             except (zipfile.BadZipFile, EOFError, OSError) as error:
-                raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.") from error
+                raise HTTPException(
+                    status_code=400, detail="Invalid or corrupt ZIP file."
+                ) from error
             if len(pdf_bytes) > MAX_PDF_BYTES:
                 raise HTTPException(
                     status_code=413, detail="A PDF exceeds the per-file size limit."
@@ -413,8 +470,7 @@ def public_config():
 
 
 @app.get("/status")
-def status(x_user: str | None = Header(default=None)):
-    user_id = get_user_id(x_user)
+def status(user_id: str = Depends(get_user_id)):
     store = load_store_for_user(user_id)
     sources = sorted({str(item.get("source", "unknown")) for item in store.meta})
     return {
@@ -426,8 +482,7 @@ def status(x_user: str | None = Header(default=None)):
 
 
 @app.post("/upload_zip")
-async def upload_zip(file: UploadFile = File(...), x_user: str | None = Header(default=None)):
-    user_id = get_user_id(x_user)
+async def upload_zip(file: UploadFile = File(...), user_id: str = Depends(get_user_id)):
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Please upload a ZIP file.")
 
@@ -470,9 +525,8 @@ async def upload_zip(file: UploadFile = File(...), x_user: str | None = Header(d
 def ingest_user_pdfs(
     payload: IngestRequest | None = None,
     authorization: str | None = Header(default=None),
-    x_user: str | None = Header(default=None),
+    user_id: str = Depends(get_user_id),
 ):
-    user_id = get_user_id(x_user)
     requested_tag = validate_tag(payload.tag if payload else None)
     api_key = resolve_api_key(authorization)
     paths = user_paths(user_id)
@@ -570,9 +624,8 @@ def ingest_user_pdfs(
 def chat_api(
     payload: ChatRequest,
     authorization: str | None = Header(default=None),
-    x_user: str | None = Header(default=None),
+    user_id: str = Depends(get_user_id),
 ):
-    user_id = get_user_id(x_user)
     tag = validate_tag(payload.tag)
     api_key = resolve_api_key(authorization)
     store = load_store_for_user(user_id, api_key=api_key)
@@ -621,9 +674,8 @@ def chat_api(
 def flashcards_api(
     payload: FlashcardRequest,
     authorization: str | None = Header(default=None),
-    x_user: str | None = Header(default=None),
+    user_id: str = Depends(get_user_id),
 ):
-    user_id = get_user_id(x_user)
     tag = validate_tag(payload.tag)
     api_key = resolve_api_key(authorization)
     store = load_store_for_user(user_id, api_key=api_key)

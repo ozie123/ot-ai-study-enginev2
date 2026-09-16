@@ -2,7 +2,7 @@
 
 OT AI Study Engine is a source-grounded study workspace. A learner uploads a ZIP containing PDF notes, the backend extracts and embeds the text into a per-session FAISS index, and the interface generates cited answers and revision flashcards from the retrieved material.
 
-The application is intentionally a compact FastAPI service with a framework-free frontend. Release 1 focuses on production safety, reliability, accessible user feedback, and test coverage without changing the AI provider or introducing a database or authentication vendor.
+The application is intentionally a compact FastAPI service with a framework-free frontend. Release 1 focuses on production safety, reliability, accessible user feedback, and test coverage without changing the AI provider or requiring an external authentication vendor. Anonymous session ownership is stored in a local SQLite database.
 
 ## Features
 
@@ -12,7 +12,7 @@ The application is intentionally a compact FastAPI service with a framework-free
 - Source-grounded Q&A in detailed or exam mode.
 - Six-card structured flashcard generation.
 - Page-level source labels for generated material.
-- Anonymous browser session that preserves the existing study bucket ID.
+- Server-issued anonymous sessions with private, expiring cookies and server-side ownership.
 - Clear loading, success, empty, timeout, and failure states.
 - Keyboard-accessible, responsive interface with no untrusted HTML injection.
 - Health and readiness endpoints for deployment checks.
@@ -23,7 +23,7 @@ AI-generated material can be wrong or incomplete. Important answers should alway
 
 ```mermaid
 flowchart LR
-    Browser["Browser UI"] -->|"ZIP and X-User"| API["FastAPI web service"]
+    Browser["Browser UI"] -->|"ZIP and session cookie"| API["FastAPI web service"]
     API --> Uploads["Validated per-session PDFs"]
     API --> Extract["pypdf extraction and chunking"]
     Extract --> Embed["OpenAI text-embedding-3-small"]
@@ -92,6 +92,8 @@ python -m pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
+For localhost HTTP, set `OT_SESSION_COOKIE_SECURE=false` in your copied `.env`. Production HTTPS must keep it `true`.
+
 Leave `OPENAI_API_KEY=` empty to run the interface and mocked tests without live AI. When a separate development key is available, set it only in the ignored local `.env` file:
 
 ```dotenv
@@ -125,7 +127,7 @@ python -m backend.core
 | `OPENAI_EMBEDDING_MODEL` | No | `text-embedding-3-small` | Index and query embedding model |
 | `OPENAI_TIMEOUT_SECONDS` | No | `45` | SDK request timeout |
 | `OPENAI_MAX_RETRIES` | No | `1` | SDK retry count for transient failures |
-| `CORS_ORIGINS` | No | empty | Comma-separated origins for a separate frontend |
+| `CORS_ORIGINS` | No | empty | Non-credentialed public reads only; study sessions are same-origin |
 | `OT_DATA_DIR` | No | `backend/users` | Runtime storage root |
 | `MAX_UPLOAD_BYTES` | No | `26214400` | Maximum ZIP request size |
 | `MAX_ZIP_MEMBERS` | No | `50` | Maximum files in one ZIP |
@@ -157,18 +159,27 @@ The SDK is configured for a 45-second timeout and one retry. Output-token limits
 | `GET` | `/health` | Lightweight liveness check |
 | `GET` | `/ready` | Frontend and storage readiness check |
 | `GET` | `/config` | Non-secret public client configuration |
+| `POST` | `/session` | Start or resume a server-issued anonymous session |
+| `DELETE` | `/session` | Revoke the current session; keep stored files |
 | `GET` | `/status` | Current study-index counts and tags |
 | `POST` | `/upload_zip` | Validate and store a ZIP of PDFs |
 | `POST` | `/ingest_user_pdfs` | Extract and embed new PDFs |
 | `POST` | `/chat` | Generate a grounded answer |
 | `POST` | `/flashcards` | Generate six structured flashcards |
 
-`X-User` is an opaque local bucket identifier, not authentication. It is strictly validated but does not prove identity.
+All study endpoints require a valid server-issued cookie. `X-User` is rejected; neither a legacy bucket ID nor an OpenAI API key proves ownership. Start a session with `POST /session` and `X-Study-Request: 1`, retain the response cookie, and include that header on every state-changing request. `DELETE /session` revokes access without deleting uploaded files. Cross-origin writes are rejected.
+
+Sessions use random 256-bit tokens, stored only as SHA-256 hashes in `OT_DATA_DIR/sessions.sqlite3`. The database maps each token to a separately generated study bucket. Cookies are HttpOnly, SameSite=Strict, and Secure by default, with the `__Host-` prefix and no Domain attribute. Absolute expiry is 30 days; reloading does not extend it. Private responses use `Cache-Control: no-store`. Session records survive restarts only when the data directory survives.
+
+For **local HTTP development only**, set `OT_SESSION_COOKIE_SECURE=false` in `.env`; this uses a distinct development cookie name. Keep the default `true` on HTTPS deployments. Behind a reverse proxy, configure trusted proxy handling so the application sees the correct public scheme/host; do not weaken origin checks. Serve the study frontend from the API origin. `CORS_ORIGINS` does not enable credentialed cross-origin study access.
+
+**Migration:** old uploads remain on disk but are not claimed using browser-local IDs. Re-upload notes to a new session; any future migration must independently verify ownership. Do not expose an endpoint that adopts a supplied legacy ID. Clearing cookies, expiry, or revocation loses browser access; these are anonymous sessions, not recoverable accounts. Shared-browser users share the cookie. Persist and protect the session database together with the note files.
 
 ## Tests and checks
 
 ```bash
 python -m pytest -q
+node --test tests/frontend/*.test.mjs
 python -m ruff check backend tests
 python -m mypy backend
 node --check frontend/app.js
@@ -215,7 +226,7 @@ Do not add a disk or database to the live service without a migration and retent
 - Same-origin requests are the default; cross-origin access is opt-in.
 - Security headers deny framing, external scripts, and unnecessary browser permissions.
 
-Important limitation: the application has no real authentication or authorization. Anyone who obtains another valid bucket ID may access that bucket. Do not use it for confidential, clinical, patient-identifiable, or legally protected information.
+Important limitation: cookie-based anonymous ownership is enforced, but there are no user accounts, recovery, or cross-device identity. Anyone with the session cookie can act as that session. Public-launch blockers still include abuse controls, durable storage, and transactional index recovery.
 
 The public Git history previously included uploaded study documents even though they were later deleted from the current branch. See [the audit](docs/AUDIT_AND_ROADMAP.md) for the required history-cleanup procedure. Do not add new user data to Git.
 
@@ -247,7 +258,7 @@ FAISS and `chunks.json` must have matching entry counts and must have been produ
 
 ## Known limitations
 
-- No server-side accounts, authorization, password reset, or secure cross-device identity.
+- No user accounts, password reset, session recovery, or secure cross-device identity.
 - Runtime files are ephemeral on a default Render web service.
 - No OCR for scanned/image-only PDFs.
 - No durable job queue; large ingestion requests occupy one worker.

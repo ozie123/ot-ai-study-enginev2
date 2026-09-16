@@ -67,7 +67,7 @@ def test_missing_scope_never_falls_back_or_generates(
 
     monkeypatch.setattr(server, "create_openai_client", unexpected_client)
     response = client.post(
-        endpoint, headers={"X-User": "test-user", "Authorization": "Bearer test-key"}, json=payload
+        endpoint, headers={"Authorization": "Bearer test-key"}, json=payload
     )
     assert response.status_code == 200
     if endpoint == "/chat":
@@ -111,7 +111,7 @@ def test_query_keeps_topic_and_explicit_scope(
     monkeypatch.setattr(store, "search", search)
     monkeypatch.setattr(server, "load_store_for_user", lambda *args, **kwargs: store)
     response = client.post(
-        endpoint, headers={"X-User": "test-user", "Authorization": "Bearer test-key"}, json=payload
+        endpoint, headers={"Authorization": "Bearer test-key"}, json=payload
     )
     assert response.status_code == 200
     assert calls == [(expected_query, expected_tag, expected_k)]

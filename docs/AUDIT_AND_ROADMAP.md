@@ -1,5 +1,15 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 16 September 2026 — session ownership checkpoint
+
+The `codex/secure-sessions` batch builds on pushed retrieval commit `a352f6b10c963ba0de1050b6f086eee39c26532b`. It replaces client-selected buckets with server-issued anonymous cookies, hashed SQLite session records, absolute expiry, revocation, and same-origin write checks. Status, uploads, ingestion, chat, and flashcards require ownership. The frontend initializes its session before study requests. Validation: 67 Python tests, 2 JavaScript startup tests, Ruff, mypy, and JavaScript syntax checks pass. Tests use mocked AI; no live provider or deployment verification was performed.
+
+This closes the arbitrary `X-User` ownership path but does not add accounts or cross-device recovery. Legacy uploads remain stored and must be re-uploaded; never auto-adopt a client-supplied old ID. Local HTTP requires `OT_SESSION_COOKIE_SECURE=false`; production retains secure cookies and must preserve the data directory, including `sessions.sqlite3`.
+
+Next: transactional index snapshots/recovery, document replacement and deletion consistency, session-creation and AI usage limits, durable storage, then recoverable accounts. Existing single-process index locking remains a scaling constraint. Push, merge, and deployment remain with the owner in Codex.
+
+The original audit below is historical; its unauthenticated-bucket findings describe the older baseline.
+
 Audit date: 6 August 2026
 
 Baseline commit: `949271a` on `main`

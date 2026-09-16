@@ -14,10 +14,9 @@ def make_zip(files: dict[str, bytes], compression=zipfile.ZIP_DEFLATED) -> bytes
     return output.getvalue()
 
 
-def post_zip(client, content: bytes, user: str = "upload-user"):
+def post_zip(client, content: bytes):
     return client.post(
         "/upload_zip",
-        headers={"X-User": user},
         files={"file": ("notes.zip", content, "application/zip")},
     )
 
@@ -26,7 +25,8 @@ def test_valid_pdf_zip_is_saved_inside_user_directory(client, tmp_path):
     response = post_zip(client, make_zip({"nested/week1.pdf": b"%PDF-1.4\nmock"}))
     assert response.status_code == 200
     assert response.json()["uploaded_pdfs"] == 1
-    assert (tmp_path / "users" / "upload-user" / "uploads" / "week1.pdf").is_file()
+    user_id = server.sessions.lookup(server.USERS_DIR, client.cookies.get(server.SESSION_COOKIE_NAME))[0]
+    assert (tmp_path / "users" / user_id / "uploads" / "week1.pdf").is_file()
 
 
 def test_invalid_zip_is_rejected(client):

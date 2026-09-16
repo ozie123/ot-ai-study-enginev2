@@ -17,5 +17,8 @@ from backend import server  # noqa: E402
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "USERS_DIR", tmp_path / "users")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with TestClient(server.app) as test_client:
+    with TestClient(
+        server.app, base_url="https://testserver", headers={"X-Study-Request": "1"}
+    ) as test_client:
+        assert test_client.post("/session").status_code == 200
         yield test_client

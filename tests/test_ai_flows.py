@@ -71,13 +71,16 @@ def test_chat_success_uses_grounded_prompt_and_current_model(client, monkeypatch
     )
     response = client.post(
         "/chat",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"question": "What does OT support?", "mode": "exam", "tag": "week1"},
     )
     assert response.status_code == 200
     assert response.json()["status"] == "answered"
     assert response.json()["sources"] == ["week1.pdf (page 2)"]
-    assert captured == {"user_id": "ai-user", "api_key": "test-token"}
+    assert captured == {
+        "user_id": server.sessions.lookup(server.USERS_DIR, client.cookies.get(server.SESSION_COOKIE_NAME))[0],
+        "api_key": "test-token",
+    }
     call = fake_client.responses.calls[0]
     assert call["model"] == "gpt-4.1-mini"
     assert call["max_output_tokens"] == 900
@@ -90,7 +93,7 @@ def test_chat_refusal_is_not_labelled_as_answered_or_given_sources(client, monke
 
     response = client.post(
         "/chat",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"question": "What is absent?", "mode": "normal"},
     )
 
@@ -115,12 +118,15 @@ def test_incomplete_provider_response_is_withheld(client, monkeypatch):
 
     response = client.post(
         "/chat",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"question": "What does OT support?", "mode": "normal"},
     )
 
     assert response.status_code == 502
-    assert response.json()["detail"] == "The AI service returned an invalid response. Please try again."
+    assert (
+        response.json()["detail"]
+        == "The AI service returned an invalid response. Please try again."
+    )
     assert "Unsupported partial answer" not in response.text
 
 
@@ -131,7 +137,7 @@ def test_flashcard_success_validates_structured_response(client, monkeypatch):
     fake_client, _ = configure_ai(monkeypatch, output_text=json.dumps({"flashcards": cards}))
     response = client.post(
         "/flashcards",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"topic": "participation", "tag": "week1"},
     )
     assert response.status_code == 200
@@ -147,7 +153,7 @@ def test_malformed_flashcard_response_is_safe(client, monkeypatch, bad_output):
     configure_ai(monkeypatch, output_text=bad_output)
     response = client.post(
         "/flashcards",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"topic": "participation"},
     )
     assert response.status_code == 502
@@ -207,7 +213,7 @@ def test_openai_errors_are_mapped_without_leaking_details(
     configure_ai(monkeypatch, error=sdk_error(error_type))
     response = client.post(
         "/chat",
-        headers={"X-User": "ai-user", "Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-token"},
         json={"question": "What does OT support?", "mode": "normal"},
     )
     assert response.status_code == expected_status

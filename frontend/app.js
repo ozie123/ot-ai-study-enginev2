@@ -1,4 +1,3 @@
-const USER_ID_KEY = "ot_user_id";
 const API_TIMEOUT_MS = 65_000;
 const INGEST_TIMEOUT_MS = 180_000;
 
@@ -34,17 +33,8 @@ const elements = {
 
 let publicConfig = { server_managed_ai: false };
 
-function getUserId() {
-  const existing = localStorage.getItem(USER_ID_KEY);
-  if (existing && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(existing)) return existing;
-  const id = crypto.randomUUID ? crypto.randomUUID() : `session-${Date.now()}`;
-  localStorage.setItem(USER_ID_KEY, id);
-  return id;
-}
-
-const userId = getUserId();
-
-// Remove sensitive values written by the prototype. The opaque study bucket remains.
+// Legacy identifiers cannot prove ownership of a server-side session.
+localStorage.removeItem("ot_user_id");
 localStorage.removeItem("ot_api_key");
 localStorage.removeItem("ot_accounts");
 localStorage.removeItem("ot_logged_in");
@@ -70,7 +60,7 @@ function setLoading(button, isLoading, label) {
 }
 
 function sessionHeaders({ json = false } = {}) {
-  const headers = { "X-User": userId };
+  const headers = { "X-Study-Request": "1" };
   const key = elements.apiKey.value.trim();
   if (key) headers.Authorization = `Bearer ${key}`;
   if (json) headers["Content-Type"] = "application/json";
@@ -81,7 +71,8 @@ async function apiFetch(path, options = {}, timeoutMs = API_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(path, { ...options, signal: controller.signal });
+    if (path !== "/config" && path !== "/session") await sessionReady;
+    const response = await fetch(path, { ...options, credentials: "same-origin", signal: controller.signal });
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json")
       ? await response.json()
@@ -215,7 +206,6 @@ async function refreshStatus() {
   }
 }
 
-elements.sessionPreview.textContent = `${userId.slice(0, 8)}…`;
 elements.refreshBtn.addEventListener("click", refreshStatus);
 
 elements.zipFile.addEventListener("change", () => {
@@ -386,4 +376,16 @@ elements.flashcardBtn.addEventListener("click", async () => {
   }
 });
 
+async function initializeSession() {
+  const data = await apiFetch("/session", {
+    method: "POST", headers: { "X-Study-Request": "1" },
+  }, 10_000);
+  elements.sessionPreview.textContent = data.session_label;
+}
+
+const sessionReady = initializeSession();
+sessionReady.catch(() => {
+  elements.sessionPreview.textContent = "Unavailable";
+  setNotice("Could not start a study session. Check cookies are enabled and refresh.", "error");
+});
 Promise.all([loadConfig(), refreshStatus()]);
