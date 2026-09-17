@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import logging
 import os
 import re
@@ -15,7 +14,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
-import faiss
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -287,24 +285,14 @@ def load_store_for_user(user_id: str, api_key: str | None = None) -> NoteStore:
     paths = user_paths(user_id)
     store = NoteStore(base_path=paths["data_dir"], api_key=api_key)
 
-    if paths["faiss"].exists() and paths["chunks"].exists():
-        try:
-            index = faiss.read_index(str(paths["faiss"]))
-            store.index = index
-            with paths["chunks"].open("r", encoding="utf-8") as file_handle:
-                payload = json.load(file_handle)
-            store.chunks = payload.get("chunks", [])
-            store.tags = payload.get("tags", ["untagged"] * len(store.chunks))
-            store.meta = payload.get("meta", [{}] * len(store.chunks))
-            store.dim = payload.get("dim")
-            if not (len(store.chunks) == len(store.tags) == len(store.meta) == index.ntotal):
-                raise ValueError("Study index files are inconsistent")
-        except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
-            logger.error("study_index_load_failed user_id=%s", user_id)
-            raise HTTPException(
-                status_code=500,
-                detail="This study index could not be loaded. Re-ingest the source PDFs.",
-            ) from error
+    try:
+        store.load()
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, zipfile.BadZipFile) as error:
+        logger.error("study_index_load_failed user_id=%s", user_id)
+        raise HTTPException(
+            status_code=500,
+            detail="This study index could not be loaded. Restore a verified backup before retrying.",
+        ) from error
     return store
 
 
@@ -312,24 +300,9 @@ def save_store_for_user(user_id: str, store: NoteStore) -> None:
     if store.index is None or not store.chunks:
         return
 
-    paths = user_paths(user_id)
-    index_temp = paths["faiss"].with_suffix(".index.tmp")
-    chunks_temp = paths["chunks"].with_suffix(".json.tmp")
-    payload = {
-        "chunks": store.chunks,
-        "tags": store.tags,
-        "meta": store.meta,
-        "dim": store.dim,
-    }
-    try:
-        faiss.write_index(store.index, str(index_temp))
-        with chunks_temp.open("w", encoding="utf-8") as file_handle:
-            json.dump(payload, file_handle, ensure_ascii=False)
-        os.replace(index_temp, paths["faiss"])
-        os.replace(chunks_temp, paths["chunks"])
-    finally:
-        index_temp.unlink(missing_ok=True)
-        chunks_temp.unlink(missing_ok=True)
+    if store.base_path.resolve() != user_paths(user_id)["data_dir"].resolve():
+        raise ValueError("Study store does not belong to this session")
+    store.save()
 
 
 def build_sources(hits) -> list[str]:

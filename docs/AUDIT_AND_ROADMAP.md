@@ -1,5 +1,15 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 17 September 2026 — atomic index snapshot checkpoint
+
+Built on preserved local secure-session commit `6a865e9d21532065ff44410c82e528ff140137f5`, whose base remains remote `a352f6b10c963ba0de1050b6f086eee39c26532b` (fetched this run). No prior patch was reapplied and no remote was written.
+
+API and CLI now share one persistence implementation: `study.snapshot` contains both FAISS vectors and JSON metadata, flushed before a single atomic replacement. Failed writes leave the previous snapshot available; uncommitted temporary files are ignored on restart. Metadata types, counts, and dimensions are checked before publishing or mutating memory. Partial legacy pairs and corrupt snapshots fail closed. Complete legacy pairs remain readable and are retained when the next save migrates to a snapshot; they are never used as a fallback after migration. API saves also check the store's owner directory.
+
+Validation: 82 Python tests and 2 JavaScript startup tests, Ruff, mypy, JavaScript syntax, and whitespace checks pass. Regression tests inject serialization, metadata-write, fsync, and replace failures and cover restart, migration, malformed metadata, partial legacy state, and ownership. No live AI calls, deployment, or user data modifications were performed.
+
+Limits: filesystem atomic replacement is assumed; this is not multi-process coordination or a power-loss/backup guarantee (directory fsync is not implemented). Interrupted temporary files may remain on disk. Corruption requires a verified backup; no automatic rollback to stale legacy data. Clearing notes is not a multi-file transaction. Document replacement/deletion consistency, usage limits, durable hosting, and recovery UX remain next. Retain the secure-session patch before this patch in all recovery handoffs.
+
 ## 16 September 2026 — session ownership checkpoint
 
 The `codex/secure-sessions` batch builds on pushed retrieval commit `a352f6b10c963ba0de1050b6f086eee39c26532b`. It replaces client-selected buckets with server-issued anonymous cookies, hashed SQLite session records, absolute expiry, revocation, and same-origin write checks. Status, uploads, ingestion, chat, and flashcards require ownership. The frontend initializes its session before study requests. Validation: 67 Python tests, 2 JavaScript startup tests, Ruff, mypy, and JavaScript syntax checks pass. Tests use mocked AI; no live provider or deployment verification was performed.

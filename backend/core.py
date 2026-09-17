@@ -2,6 +2,8 @@ import json
 import os
 import re
 import shlex
+import tempfile
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -120,6 +122,7 @@ class NoteStore:
         # per-user file paths
         self.faiss_path = self.base_path / "faiss.index"
         self.chunks_path = self.base_path / "chunks.json"
+        self.snapshot_path = self.base_path / "study.snapshot"
         self.stats_path = self.base_path / "stats.json"
         self.history_path = self.base_path / "history.jsonl"
 
@@ -270,35 +273,81 @@ class NoteStore:
             print("Nothing to save (no notes loaded).")
             return
 
-        faiss.write_index(self.index, str(self.faiss_path))
-
         payload = {
             "chunks": self.chunks,
             "tags": self.tags,
             "meta": self.meta,
             "dim": self.dim,
         }
-        with open(self.chunks_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
+        self._validate_snapshot(self.index, payload)
+        # A single replacement publishes vectors and metadata together. Never
+        # overwrite the active snapshot until both have been flushed to disk.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.base_path, delete=False) as f:
+                temporary = Path(f.name)
+                with zipfile.ZipFile(f, "w") as archive:
+                    archive.writestr("index", faiss.serialize_index(self.index).tobytes())
+                    archive.writestr("metadata", json.dumps(payload, ensure_ascii=False))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, self.snapshot_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
         print(f"Saved to {self.base_path}")
 
     def load(self) -> bool:
-        if not (self.faiss_path.exists() and self.chunks_path.exists()):
+        if self.snapshot_path.exists():
+            with zipfile.ZipFile(self.snapshot_path) as archive:
+                index = faiss.deserialize_index(
+                    np.frombuffer(archive.read("index"), dtype="uint8").copy()
+                )
+                payload = json.loads(archive.read("metadata"))
+        elif self.faiss_path.exists() or self.chunks_path.exists():
+            # Read-only legacy migration: the next save publishes a snapshot;
+            # retain the old pair, but never fall back once a snapshot exists.
+            if not (self.faiss_path.exists() and self.chunks_path.exists()):
+                raise ValueError("Incomplete legacy study index")
+            index = faiss.read_index(str(self.faiss_path))
+            with self.chunks_path.open(encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict):
+                payload.setdefault("tags", ["untagged"] * len(payload.get("chunks", [])))
+                payload.setdefault("meta", [{}] * len(payload.get("chunks", [])))
+                payload.setdefault("dim", index.d)
+        else:
             return False
 
-        self.index = faiss.read_index(str(self.faiss_path))
-
-        with open(self.chunks_path, encoding="utf-8") as f:
-            payload = json.load(f)
-
-        self.chunks = payload.get("chunks", [])
-        self.tags = payload.get("tags", ["untagged"] * len(self.chunks))
-        self.meta = payload.get("meta", [{}] * len(self.chunks))
-        self.dim = payload.get("dim", None)
+        self._validate_snapshot(index, payload)
+        self.index = index
+        self.chunks = payload["chunks"]
+        self.tags = payload["tags"]
+        self.meta = payload["meta"]
+        self.dim = payload["dim"]
         return True
 
+    @staticmethod
+    def _validate_snapshot(index, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid study index metadata")
+        for key, item_type in (("chunks", str), ("tags", str), ("meta", dict)):
+            values = payload.get(key)
+            if not isinstance(values, list) or len(values) != index.ntotal:
+                raise ValueError("Study index files are inconsistent")
+            if not all(isinstance(value, item_type) for value in values):
+                raise ValueError("Invalid study index metadata entries")
+        if payload.get("dim") != index.d:
+            raise ValueError("Study index dimensions are inconsistent")
+
     def clear(self, delete_files: bool = True):
+        if delete_files:
+            # Remove legacy files first so they cannot reappear after clearing
+            # a migrated snapshot. Propagate failures instead of claiming success.
+            self.faiss_path.unlink(missing_ok=True)
+            self.chunks_path.unlink(missing_ok=True)
+            self.snapshot_path.unlink(missing_ok=True)
         # clear memory
         self.index = None
         self.chunks = []

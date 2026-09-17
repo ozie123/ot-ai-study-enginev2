@@ -39,6 +39,8 @@ The API key is resolved for each AI request. A server-managed `OPENAI_API_KEY` i
 
 ## Technology stack
 
+Index persistence uses one `study.snapshot` per session, containing vectors and metadata published together by atomic file replacement. Existing `faiss.index`/`chunks.json` pairs are read until the next successful save creates the snapshot; keep backups of the whole session data directory. Once a snapshot exists, damaged snapshots fail closed rather than reverting to older notes. Run only one worker: this change does not add cross-process locking, durable hosting, or power-loss guarantees. The anonymous session database must also be preserved for ownership to survive restarts.
+
 | Layer | Technology |
 |---|---|
 | Web API | Python 3.12, FastAPI, Uvicorn |
