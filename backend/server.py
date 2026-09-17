@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 try:
     from . import sessions
@@ -32,6 +33,7 @@ try:
         resolve_api_key,
     )
     from .core import NoteStore, chunk_text, infer_tag_from_filename, read_pdf_pages
+    from .storage_lock import storage_lock
 except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
     import sessions  # type: ignore[no-redef]
     from ai_service import (  # type: ignore[no-redef]
@@ -49,6 +51,7 @@ except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
         infer_tag_from_filename,
         read_pdf_pages,
     )
+    from storage_lock import storage_lock  # type: ignore[no-redef]
 
 
 APP_VERSION = "1.1.0"
@@ -157,7 +160,7 @@ async def add_security_and_request_headers(request: Request, call_next):
     )
     started = time.monotonic()
     response = await call_next(request)
-    if request.url.path in {
+    if request.url.path.startswith("/documents") or request.url.path in {
         "/session",
         "/status",
         "/upload_zip",
@@ -196,7 +199,11 @@ def user_lock(user_id: str) -> Iterator[None]:
     with _locks_guard:
         lock = _user_locks.setdefault(user_id, threading.Lock())
     with lock:
-        yield
+        try:
+            with storage_lock(user_paths(user_id)["user_dir"] / "storage.lock"):
+                yield
+        except TimeoutError as error:
+            raise HTTPException(503, "Study storage is busy. Retry shortly.") from error
 
 
 def get_user_id(request: Request) -> str:
@@ -297,12 +304,62 @@ def load_store_for_user(user_id: str, api_key: str | None = None) -> NoteStore:
 
 
 def save_store_for_user(user_id: str, store: NoteStore) -> None:
-    if store.index is None or not store.chunks:
-        return
-
     if store.base_path.resolve() != user_paths(user_id)["data_dir"].resolve():
         raise ValueError("Study store does not belong to this session")
     store.save()
+
+
+def document_store(user_id: str, api_key: str | None = None) -> NoteStore:
+    """Call under user_lock. Migrate once, then retire legacy copies before edits."""
+    try:
+        return _document_store(user_id, api_key)
+    except OSError as error:
+        logger.error("document_migration_failed user_id=%s", user_id)
+        raise HTTPException(
+            500, "Study storage preparation failed. Retry before changing documents."
+        ) from error
+
+
+def _document_store(user_id: str, api_key: str | None = None) -> NoteStore:
+    store = load_store_for_user(user_id, api_key)
+    paths = user_paths(user_id)
+    # Only API snapshot temporaries; the owner lock rules out a live API writer.
+    for temporary in paths["data_dir"].glob("snapshot-*.tmp"):
+        temporary.unlink()
+    legacy_pdfs = sorted(paths["uploads_dir"].glob("*.pdf"))
+    if store.documents is None:
+        store.documents = {}
+        seen = set()
+        for pdf in legacy_pdfs:
+            name = safe_pdf_name(pdf.name).casefold()
+            if name in seen:
+                raise HTTPException(
+                    409, "Legacy PDF names conflict. Resolve them before migration."
+                )
+            seen.add(name)
+            content = pdf.read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            matching = [m for m in store.meta if str(m.get("source", "")).casefold() == name]
+            if matching and all(m.get("document_sha256") == digest for m in matching):
+                store.documents[name] = content
+            else:
+                store.pending[name] = content
+        # The manifest is the authority after this atomic commit, even if cleanup
+        # is interrupted. A later request resumes cleanup, never reimports files.
+        save_store_for_user(user_id, store)
+    for path in [*legacy_pdfs, store.faiss_path, store.chunks_path]:
+        path.unlink(missing_ok=True)
+    return store
+
+
+def commit_documents(user_id: str, store: NoteStore) -> None:
+    try:
+        save_store_for_user(user_id, store)
+    except (OSError, ValueError, RuntimeError) as error:
+        logger.error("document_save_failed user_id=%s", user_id)
+        raise HTTPException(
+            500, "Changes could not be saved. Previous study data is intact."
+        ) from error
 
 
 def build_sources(hits) -> list[str]:
@@ -404,14 +461,6 @@ def extract_valid_pdfs(content: bytes) -> list[tuple[str, bytes]]:
     return extracted
 
 
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file_handle:
-        while chunk := file_handle.read(READ_CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 @app.get("/")
 def home():
     return FileResponse(str(FRONTEND_DIR / "index.html"))
@@ -446,11 +495,17 @@ def public_config():
 def status(user_id: str = Depends(get_user_id)):
     store = load_store_for_user(user_id)
     sources = sorted({str(item.get("source", "unknown")) for item in store.meta})
+    indexed = {name.casefold() for name in sources if name.lower().endswith(".pdf")}
+    names = indexed | set(store.documents or {}) | set(store.pending)
     return {
         "chunks": len(store.chunks),
         "documents": len(sources),
         "tags": sorted(set(store.tags)) if store.tags else [],
         "ready": bool(store.chunks),
+        "document_files": [
+            {"name": name, "indexed": name in indexed, "pending": name in store.pending}
+            for name in sorted(names)
+        ],
     }
 
 
@@ -464,34 +519,43 @@ async def upload_zip(file: UploadFile = File(...), user_id: str = Depends(get_us
     finally:
         await file.close()
     pdfs = extract_valid_pdfs(content)
-    paths = user_paths(user_id)
-
-    with user_lock(user_id):
-        existing_sizes = {
-            path.name.casefold(): path.stat().st_size
-            for path in paths["uploads_dir"].glob("*.pdf")
-            if path.is_file()
-        }
-        retained_size = sum(existing_sizes.values())
-        for filename, _ in pdfs:
-            retained_size -= existing_sizes.get(filename.casefold(), 0)
-        projected_size = retained_size + sum(len(pdf_bytes) for _, pdf_bytes in pdfs)
-        if projected_size > MAX_USER_STORAGE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail="This study session has reached its document storage limit.",
-            )
-
-        for filename, pdf_bytes in pdfs:
-            destination = paths["uploads_dir"] / filename
-            temporary = destination.with_suffix(".pdf.part")
-            try:
-                temporary.write_bytes(pdf_bytes)
-                os.replace(temporary, destination)
-            finally:
-                temporary.unlink(missing_ok=True)
-
+    await run_in_threadpool(stage_pdfs, user_id, pdfs)
     return {"uploaded_pdfs": len(pdfs), "filenames": [name for name, _ in pdfs]}
+
+
+def stage_pdfs(user_id: str, pdfs: list[tuple[str, bytes]]) -> None:
+    with user_lock(user_id):
+        store = document_store(user_id)
+        assert store.documents is not None
+        pending = {**store.pending, **{name.casefold(): content for name, content in pdfs}}
+        # Count active AND staged bytes; rollback needs both versions on disk.
+        projected_size = sum(map(len, store.documents.values())) + sum(map(len, pending.values()))
+        if projected_size > MAX_USER_STORAGE_BYTES:
+            raise HTTPException(413, "This study session has reached its document storage limit.")
+        store.pending = pending
+        commit_documents(user_id, store)
+
+
+@app.delete("/documents/{filename}")
+def delete_document(filename: str, user_id: str = Depends(get_user_id)):
+    if safe_pdf_name(filename) != filename:
+        raise HTTPException(400, "Invalid PDF filename.")
+    name = filename.casefold()
+    with user_lock(user_id):
+        store = document_store(user_id)
+        assert store.documents is not None
+        exists = (
+            name in store.documents
+            or name in store.pending
+            or any(str(meta.get("source", "")).casefold() == name for meta in store.meta)
+        )
+        if not exists:
+            raise HTTPException(404, "PDF not found in this study session.")
+        store.remove_documents({name})
+        store.documents.pop(name, None)
+        store.pending.pop(name, None)
+        commit_documents(user_id, store)
+    return {"deleted": filename}
 
 
 @app.post("/ingest_user_pdfs")
@@ -502,93 +566,70 @@ def ingest_user_pdfs(
 ):
     requested_tag = validate_tag(payload.tag if payload else None)
     api_key = resolve_api_key(authorization)
-    paths = user_paths(user_id)
-
     with user_lock(user_id):
-        store = load_store_for_user(user_id, api_key=api_key)
-        pdfs = sorted(paths["user_dir"].rglob("*.pdf"))
-        if not pdfs:
-            return {"added_chunks": 0, "files": 0, "message": "No PDFs found."}
-
-        known_hashes = {
-            str(item.get("document_sha256")) for item in store.meta if item.get("document_sha256")
-        }
+        store = document_store(user_id, api_key)
+        assert store.documents is not None
         all_chunks: list[str] = []
-        all_tags: list[str] = []
-        all_meta: list[dict] = []
-        ingested_files = 0
+        changed = set()
         duplicate_files = 0
-        skipped_files = 0
-
-        for pdf in pdfs:
-            document_hash = file_sha256(pdf)
-            if document_hash in known_hashes:
+        batches = []
+        # Parse the whole batch before altering any candidate vectors. Any bad
+        # PDF fails the batch; pending uploads remain available for retry/delete.
+        for name, content in store.pending.items():
+            digest = hashlib.sha256(content).hexdigest()
+            matching = [m for m in store.meta if str(m.get("source", "")).casefold() == name]
+            if (
+                store.documents.get(name) == content
+                and matching
+                and all(m.get("document_sha256") == digest for m in matching)
+            ):
                 duplicate_files += 1
                 continue
-
             try:
                 pages = read_pdf_pages(
-                    str(pdf),
-                    max_pages=MAX_PDF_PAGES,
-                    max_chars=MAX_PDF_TEXT_CHARS,
+                    io.BytesIO(content), max_pages=MAX_PDF_PAGES, max_chars=MAX_PDF_TEXT_CHARS
                 )
-            except Exception:
-                skipped_files += 1
-                logger.warning("pdf_extract_failed filename=%s", pdf.name)
-                continue
-
-            document_chunks: list[str] = []
-            document_meta: list[dict] = []
-            for page_number, page_text in pages:
-                for text_chunk in chunk_text(page_text):
-                    document_chunks.append(text_chunk)
-                    document_meta.append(
-                        {
-                            "source": pdf.name,
-                            "page": page_number,
-                            "is_gold": False,
-                            "document_sha256": document_hash,
-                        }
-                    )
-
-            if not document_chunks:
-                skipped_files += 1
-                continue
-            if len(all_chunks) + len(document_chunks) > MAX_INGEST_CHUNKS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Ingestion exceeds the {MAX_INGEST_CHUNKS}-chunk safety limit.",
-                )
-
-            document_tag = requested_tag or infer_tag_from_filename(pdf.name)
-            all_chunks.extend(document_chunks)
-            all_tags.extend([document_tag] * len(document_chunks))
-            all_meta.extend(document_meta)
-            ingested_files += 1
-            known_hashes.add(document_hash)
-
-        if all_chunks:
-            try:
-                # Add by tag so existing NoteStore metadata remains backward-compatible.
-                start = 0
-                while start < len(all_chunks):
-                    tag = all_tags[start]
-                    end = start + 1
-                    while end < len(all_chunks) and all_tags[end] == tag:
-                        end += 1
-                    store.add_chunks(all_chunks[start:end], tag=tag, meta_list=all_meta[start:end])
-                    start = end
-                save_store_for_user(user_id, store)
-            except HTTPException:
-                raise
+                chunks = []
+                metadata = []
+                for page, text in pages:
+                    for chunk in chunk_text(text):
+                        chunks.append(chunk)
+                        metadata.append(
+                            {
+                                "source": name,
+                                "page": page,
+                                "is_gold": False,
+                                "document_sha256": digest,
+                            }
+                        )
+                if not chunks:
+                    raise ValueError("No extractable text")
             except Exception as error:
-                raise_openai_http_error(error)
-
+                raise HTTPException(
+                    422, f"Could not read {name}. Previous study data is intact."
+                ) from error
+            all_chunks.extend(chunks)
+            if len(all_chunks) > MAX_INGEST_CHUNKS:
+                raise HTTPException(
+                    413, f"Ingestion exceeds the {MAX_INGEST_CHUNKS}-chunk safety limit."
+                )
+            changed.add(name)
+            batches.append((chunks, requested_tag or infer_tag_from_filename(name), metadata))
+        store.remove_documents(changed)
+        try:
+            for chunks, tag, metadata in batches:
+                store.add_chunks(chunks, tag=tag, meta_list=metadata)
+        except Exception as error:
+            raise_openai_http_error(error)
+        if store.pending:
+            store.documents.update(store.pending)
+            store.pending = {}
+            commit_documents(user_id, store)
     return {
         "added_chunks": len(all_chunks),
-        "files": ingested_files,
+        "files": len(changed),
         "already_ingested": duplicate_files,
-        "skipped_files": skipped_files,
+        "skipped_files": 0,
         "message": "PDFs ingested successfully." if all_chunks else "No new PDFs to ingest.",
     }
 

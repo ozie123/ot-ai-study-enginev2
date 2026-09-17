@@ -15,6 +15,7 @@ const elements = {
   ingestBtn: document.getElementById("ingestBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
   documentCount: document.getElementById("documentCount"),
+  documentFiles: document.getElementById("documentFiles"),
   chunkCount: document.getElementById("chunkCount"),
   indexState: document.getElementById("indexState"),
   tagSummary: document.getElementById("tagSummary"),
@@ -85,7 +86,7 @@ async function apiFetch(path, options = {}, timeoutMs = API_TIMEOUT_MS) {
     return body;
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new Error("The request timed out. Your existing study data is unchanged.");
+      throw new Error("The request timed out. It may still finish on the server. Refresh the library to check before retrying.");
     }
     throw error;
   } finally {
@@ -199,11 +200,44 @@ async function refreshStatus() {
     elements.chunkCount.textContent = String(data.chunks || 0);
     elements.indexState.textContent = data.ready ? "Ready" : "Not ready";
     elements.tagSummary.textContent = data.tags?.length ? data.tags.join(", ") : "None yet";
+    renderDocuments(data.document_files || []);
   } catch (error) {
     setNotice(`Library status failed: ${error.message}`, "error");
   } finally {
     elements.refreshBtn.disabled = false;
   }
+}
+
+function renderDocuments(files) {
+  elements.documentFiles.replaceChildren();
+  files.forEach((file) => {
+    const row = document.createElement("div");
+    row.className = "document-row";
+    const label = document.createElement("span");
+    label.textContent = `${file.name} · ${file.pending ? (file.indexed ? "Replacement pending" : "Pending index") : "Indexed"}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button";
+    button.textContent = "Delete";
+    button.setAttribute("aria-label", `Delete ${file.name}`);
+    button.addEventListener("click", async () => {
+      if (!window.confirm(`Delete ${file.name} and all its indexed notes?`)) return;
+      button.disabled = true;
+      try {
+        await apiFetch(`/documents/${encodeURIComponent(file.name)}`, {
+          method: "DELETE", headers: sessionHeaders(),
+        });
+        setNotice(`${file.name} deleted.`, "success");
+        await refreshStatus();
+      } catch (error) {
+        setNotice(`Deletion failed: ${error.message}`, "error");
+      } finally {
+        button.disabled = false;
+      }
+    });
+    row.append(label, button);
+    elements.documentFiles.append(row);
+  });
 }
 
 elements.refreshBtn.addEventListener("click", refreshStatus);

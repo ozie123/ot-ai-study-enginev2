@@ -1,5 +1,15 @@
 # Changelog
 
+## Transactional PDF replacement and deletion — Unreleased
+
+- Include active and pending PDF bytes in the atomic index snapshot. Stage uploads until the entire ingestion batch succeeds; retain working files and vectors on parse, embedding, or save failures.
+- Replace all chunks for a canonical filename without rebuilding unrelated embeddings. Persist deletion of the last document as an empty snapshot.
+- Add session-scoped `DELETE /documents/{filename}` and library controls with pending replacement status.
+- Serialize API writes using per-owner thread and OS locks; preserve consistency across process crashes and reloads.
+- Migrate authenticated sessions' loose uploads into snapshots and resume interrupted cleanup without resurrecting documents. Never adopt browser-supplied owners.
+- Count active and pending PDF bytes toward the quota; document whole-snapshot costs, migration, backup, and downgrade restrictions.
+- Add failure injection, concurrent worker, crash recovery, real PDF parser, deletion UI, and session isolation regressions.
+
 ## Secure anonymous sessions — Unreleased
 
 - Replace client-controlled X-User ownership with random server-issued cookies and persistent hashed session records.

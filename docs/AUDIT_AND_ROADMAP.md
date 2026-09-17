@@ -1,5 +1,17 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 17 September 2026 — PDF replacement and deletion
+
+Recovered the handoff in order on `codex/study-snapshots-20260917`: `618c7ea` is the secure-session patch equivalent to `6a865e9`; `03e8c82` is the atomic-snapshot patch equivalent to `64d7c0b`. Both sit above the unchanged retrieval base `a352f6b`. Earlier checkpoint sections below are historical.
+
+The snapshot now commits active PDFs, pending uploads, vectors, and metadata together. Ingestion replaces all chunks for changed filenames, preserves other vectors, and commits only after every pending PDF has parsed and embedded successfully. Deletion removes active/pending bytes and metadata, including the empty-library case. Per-owner OS locks coordinate cooperating API workers; uploads perform blocking storage work outside the async event loop. Session cookies and same-origin checks protect the new deletion route. The UI exposes pending replacements and deletion, and handles ambiguous browser timeouts accurately.
+
+Authenticated-session migration publishes a document manifest before retiring loose uploads and legacy index copies. Interrupted cleanup resumes before subsequent mutations. Browser-selected legacy owners remain inaccessible. See README for migration, backup, quota, and downgrade implications. Runtime mutation tests use temporary synthetic data and mocked embeddings, including a real PDF parser test and independent processes terminated before/after atomic publication.
+
+Remaining limits: whole-snapshot memory/write costs, local-filesystem-only locks, optional CLI excluded from API concurrency guarantees, no directory fsync or power-loss guarantee, no automated backup recovery, no OCR or durable ingestion jobs. Existing in-flight answers may finish using their earlier snapshot. Recommended next task: session creation and AI usage quotas/rate limits before public use, followed by durable hosting and tested recovery. Nothing is merged or deployed by this work.
+
+Final local Windows validation: 107 Python tests and 5 JavaScript tests passed, including the regression ensuring console errors after publication cannot report a failed deletion. Ruff, mypy, JavaScript syntax, Python compilation, and `git diff --check` passed. One upstream Starlette/httpx deprecation warning remains. Tests made no live AI requests. Handoff extraction files are retained locally and ignored; user PDFs, session stores, and secrets are excluded from this implementation commit.
+
 ## 17 September 2026 — atomic index snapshot checkpoint
 
 Built on preserved local secure-session commit `6a865e9d21532065ff44410c82e528ff140137f5`, whose base remains remote `a352f6b10c963ba0de1050b6f086eee39c26532b` (fetched this run). No prior patch was reapplied and no remote was written.

@@ -407,3 +407,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .drop-zone { min-height: 180px; padding: 20px; }
   .footer { flex-direction: column; }
 }
+.document-files { display: grid; gap: 0.75rem; margin-top: 1rem; }
+.document-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.document-row span { overflow-wrap: anywhere; min-width: 0; font-size: 0.85rem; }
+.document-row button { flex-shrink: 0; }

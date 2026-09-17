@@ -11,3 +11,7 @@ output/
 __pycache__/
 *.pyc
 *.tmp
+tmp/handoff/
+*.pdf
+study.snapshot
+sessions.sqlite3*

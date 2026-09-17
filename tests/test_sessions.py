@@ -36,6 +36,7 @@ def pdf_zip():
         ("post", "/chat", {"json": {"question": "private?"}}),
         ("post", "/flashcards", {"json": {"topic": "private"}}),
         ("delete", "/session", {}),
+        ("delete", "/documents/private.pdf", {}),
     ],
 )
 def test_all_private_endpoints_require_session(client, method, path, kwargs):
@@ -93,7 +94,7 @@ def test_revocation_blocks_replay_and_keeps_files(client):
     with fresh_client() as replay:
         replay.cookies.set(server.SESSION_COOKIE_NAME, old_token)
         assert replay.get("/status").status_code == 401
-    assert (server.USERS_DIR / user / "uploads" / "private.pdf").exists()
+    assert server.load_store_for_user(user).pending["private.pdf"] == b"%PDF-1.4\nprivate"
 
 
 @pytest.mark.parametrize(
@@ -110,6 +111,7 @@ def test_csrf_rejected_before_session_creation_or_upload(client, headers):
     assert client.post("/session", headers=headers).status_code == 403
     assert client.post("/upload_zip", headers=headers, files=pdf_zip()).status_code == 403
     assert client.delete("/session", headers=headers).status_code == 403
+    assert client.delete("/documents/private.pdf", headers=headers).status_code == 403
 
 
 def test_same_origin_allowed_and_legacy_identifier_cannot_claim_data(client):
@@ -129,8 +131,7 @@ def test_two_sessions_cannot_read_or_overwrite_each_others_notes(client, monkeyp
     headers = {"Authorization": "Bearer test-key"}
     assert client.post("/ingest_user_pdfs", json={}, headers=headers).json()["added_chunks"] == 1
     owner = identity(client)
-    owner_pdf = server.USERS_DIR / owner / "uploads" / "private.pdf"
-    original = owner_pdf.read_bytes()
+    original = server.load_store_for_user(owner).documents["private.pdf"]
     with fresh_client() as other:
         assert other.post("/session").status_code == 200
         assert identity(other) != owner
@@ -148,7 +149,7 @@ def test_two_sessions_cannot_read_or_overwrite_each_others_notes(client, monkeyp
             other.post("/upload_zip", files=pdf_zip(), headers={"X-User": owner}).status_code == 400
         )
         assert other.post("/upload_zip", files=pdf_zip()).status_code == 200
-        assert (server.USERS_DIR / identity(other) / "uploads" / "private.pdf").exists()
+        assert server.load_store_for_user(identity(other)).pending["private.pdf"] == original
         assert other.delete("/session").status_code == 200
-    assert owner_pdf.read_bytes() == original
+    assert server.load_store_for_user(owner).documents["private.pdf"] == original
     assert client.get("/status").json()["chunks"] == 1

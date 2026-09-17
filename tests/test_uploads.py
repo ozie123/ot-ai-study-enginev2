@@ -26,7 +26,7 @@ def test_valid_pdf_zip_is_saved_inside_user_directory(client, tmp_path):
     assert response.status_code == 200
     assert response.json()["uploaded_pdfs"] == 1
     user_id = server.sessions.lookup(server.USERS_DIR, client.cookies.get(server.SESSION_COOKIE_NAME))[0]
-    assert (tmp_path / "users" / user_id / "uploads" / "week1.pdf").is_file()
+    assert server.load_store_for_user(user_id).pending["week1.pdf"] == b"%PDF-1.4\nmock"
 
 
 def test_invalid_zip_is_rejected(client):

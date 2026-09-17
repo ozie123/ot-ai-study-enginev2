@@ -4,8 +4,10 @@ import re
 import shlex
 import tempfile
 import zipfile
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import BinaryIO
 
 import faiss
 import numpy as np
@@ -48,7 +50,7 @@ def chunk_text(text: str, max_chars: int = 900) -> list[str]:
 
 
 def read_pdf_pages(
-    path: str,
+    path: str | BinaryIO,
     max_pages: int | None = None,
     max_chars: int | None = None,
 ) -> list[tuple[int, str]]:
@@ -136,6 +138,9 @@ class NoteStore:
         self.meta: list[dict] = []  # {"source": "...", "page": 1, "is_gold": bool}
         self.index: faiss.Index | None = None
         self.dim: int | None = None
+        # None marks a pre-document snapshot, requiring controlled API migration.
+        self.documents: dict[str, bytes] | None = None
+        self.pending: dict[str, bytes] = {}
 
     # ---------- per-user stats + history ----------
     def load_stats(self) -> dict:
@@ -188,7 +193,7 @@ class NoteStore:
         vectors = self._embed(chunks)
         self.dim = vectors.shape[1]
 
-        if self.index is None:
+        if self.index is None or self.index.ntotal == 0:
             self.index = faiss.IndexFlatIP(self.dim)
             self.chunks = []
             self.tags = []
@@ -240,9 +245,7 @@ class NoteStore:
         faiss.normalize_L2(qv)
 
         if scoped_ids is not None:
-            vectors = np.array(
-                [self.index.reconstruct(i) for i in scoped_ids], dtype="float32"
-            )
+            vectors = np.array([self.index.reconstruct(i) for i in scoped_ids], dtype="float32")
             scoped_scores = vectors @ qv[0]
             order = np.argsort(-scoped_scores, kind="stable")[:k]
             return [
@@ -269,26 +272,37 @@ class NoteStore:
 
     # ---------- persistence ----------
     def save(self):
-        if self.index is None or not self.chunks:
-            print("Nothing to save (no notes loaded).")
-            return
+        # Persist an empty index too: deleting the last document must survive reload.
+        index = self.index if self.index is not None else faiss.IndexFlatIP(self.dim or 1)
 
         payload = {
             "chunks": self.chunks,
             "tags": self.tags,
             "meta": self.meta,
-            "dim": self.dim,
+            "dim": self.dim if self.index is not None else index.d,
         }
-        self._validate_snapshot(self.index, payload)
+        self._validate_snapshot(index, payload)
+        if self.documents is not None:
+            payload["documents"] = list(self.documents)
+            payload["pending"] = list(self.pending)
         # A single replacement publishes vectors and metadata together. Never
         # overwrite the active snapshot until both have been flushed to disk.
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=self.base_path, delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                dir=self.base_path, prefix="snapshot-", suffix=".tmp", delete=False
+            ) as f:
                 temporary = Path(f.name)
                 with zipfile.ZipFile(f, "w") as archive:
-                    archive.writestr("index", faiss.serialize_index(self.index).tobytes())
+                    archive.writestr("index", faiss.serialize_index(index).tobytes())
                     archive.writestr("metadata", json.dumps(payload, ensure_ascii=False))
+                    if self.documents is not None:
+                        for group, files in (
+                            ("documents", self.documents),
+                            ("pending", self.pending),
+                        ):
+                            for number, content in enumerate(files.values()):
+                                archive.writestr(f"{group}/{number}", content)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temporary, self.snapshot_path)
@@ -296,15 +310,40 @@ class NoteStore:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
-        print(f"Saved to {self.base_path}")
+        # Publication already succeeded; a closed/limited console must not turn
+        # a committed mutation into a reported save failure.
+        with suppress(OSError, UnicodeError):
+            print(f"Saved to {self.base_path}")
 
     def load(self) -> bool:
+        documents = None
+        pending = {}
         if self.snapshot_path.exists():
             with zipfile.ZipFile(self.snapshot_path) as archive:
                 index = faiss.deserialize_index(
                     np.frombuffer(archive.read("index"), dtype="uint8").copy()
                 )
                 payload = json.loads(archive.read("metadata"))
+                if isinstance(payload, dict) and "documents" in payload:
+                    groups = []
+                    for group in ("documents", "pending"):
+                        names = payload.get(group)
+                        if (
+                            not isinstance(names, list)
+                            or not all(
+                                isinstance(name, str)
+                                and name.lower().endswith(".pdf")
+                                and "/" not in name
+                                and "\\" not in name
+                                for name in names
+                            )
+                            or len({name.casefold() for name in names}) != len(names)
+                        ):
+                            raise ValueError("Invalid document manifest")
+                        groups.append(
+                            {name: archive.read(f"{group}/{i}") for i, name in enumerate(names)}
+                        )
+                    documents, pending = groups
         elif self.faiss_path.exists() or self.chunks_path.exists():
             # Read-only legacy migration: the next save publishes a snapshot;
             # retain the old pair, but never fall back once a snapshot exists.
@@ -326,7 +365,28 @@ class NoteStore:
         self.tags = payload["tags"]
         self.meta = payload["meta"]
         self.dim = payload["dim"]
+        self.documents = documents
+        self.pending = pending
         return True
+
+    def remove_documents(self, names: set[str]) -> None:
+        """Remove all versions by canonical filename, retaining unrelated vectors."""
+        keep = [
+            i
+            for i, meta in enumerate(self.meta)
+            if str(meta.get("source", "")).casefold() not in names
+        ]
+        if len(keep) == len(self.chunks):
+            return
+        index = faiss.IndexFlatIP(self.dim or 1)
+        if keep:
+            assert self.index is not None
+            vectors = np.array([self.index.reconstruct(i) for i in keep], dtype="float32")
+            index.add(vectors)
+        self.index = index if keep else None
+        self.chunks = [self.chunks[i] for i in keep]
+        self.tags = [self.tags[i] for i in keep]
+        self.meta = [self.meta[i] for i in keep]
 
     @staticmethod
     def _validate_snapshot(index, payload):
@@ -354,6 +414,8 @@ class NoteStore:
         self.tags = []
         self.meta = []
         self.dim = None
+        self.documents = None
+        self.pending = {}
 
         # delete saved files
         if delete_files:
