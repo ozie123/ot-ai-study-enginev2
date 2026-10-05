@@ -236,6 +236,76 @@ def test_pending_only_deletion_and_quota_include_rollback_copy(client, monkeypat
     assert loaded(client).pending == {}
 
 
+def test_document_count_quota_is_atomic_and_replacement_aware(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_DOCUMENTS_PER_SESSION", 2)
+    assert upload(client, {"one.pdf": "one", "two.pdf": "two"}).status_code == 200
+    assert ingest(client).status_code == 200
+
+    # A staged replacement shares the active document's canonical name and may
+    # repair a library that predates a newly lowered cap.
+    monkeypatch.setattr(server, "MAX_DOCUMENTS_PER_SESSION", 1)
+    assert upload(client, {"ONE.pdf": "replacement"}).status_code == 200
+    staged = loaded(client)
+    original = staged.snapshot_path.read_bytes()
+    assert set(staged.documents) == {"one.pdf", "two.pdf"}
+    assert set(staged.pending) == {"one.pdf"}
+
+    # Adding a third distinct name rejects the whole upload and retains staging.
+    response = upload(client, {"one.pdf": "different replacement", "three.pdf": "three"})
+    assert response.status_code == 413
+    assert response.json()["detail"] == (
+        "This study session has reached its document-count limit."
+    )
+    assert loaded(client).snapshot_path.read_bytes() == original
+
+    # Deletion releases the slot without discarding the pending replacement.
+    assert client.delete("/documents/two.pdf").status_code == 200
+    monkeypatch.setattr(server, "MAX_DOCUMENTS_PER_SESSION", 2)
+    assert upload(client, {"three.pdf": "three"}).status_code == 200
+    assert set(loaded(client).pending) == {"one.pdf", "three.pdf"}
+
+
+def test_cumulative_chunk_quota_rejects_before_embedding_and_preserves_pending(
+    client, monkeypatch
+):
+    seed(client)
+    monkeypatch.setattr(server, "MAX_INDEXED_CHUNKS_PER_SESSION", 2)
+
+    # The old week1 chunks are excluded from the projection, so a smaller
+    # same-name replacement can bring an oversized legacy index under quota.
+    assert upload(client, {"week1.pdf": "replacement"}).status_code == 200
+    assert ingest(client).status_code == 200
+    assert loaded(client).chunks == ["unrelated", "replacement"]
+
+    assert upload(client, {"third.pdf": "third"}).status_code == 200
+    before = loaded(client)
+    original = before.snapshot_path.read_bytes()
+
+    def unexpected_embed(*args, **kwargs):
+        pytest.fail("quota rejection must happen before paid embedding work")
+
+    monkeypatch.setattr(NoteStore, "_embed", unexpected_embed)
+    response = ingest(client)
+    assert response.status_code == 413
+    assert response.json()["detail"] == (
+        "This study session has reached its indexed-chunk limit."
+    )
+    after = loaded(client)
+    assert after.snapshot_path.read_bytes() == original
+    assert after.chunks == before.chunks
+    assert after.pending == before.pending == {"third.pdf": b"%PDF-1.4\nthird"}
+
+    # Deleting one indexed document releases capacity for the staged PDF.
+    assert client.delete("/documents/week2.pdf").status_code == 200
+    monkeypatch.setattr(
+        NoteStore,
+        "_embed",
+        lambda self, texts: np.array([[1, 0]] * len(texts), dtype="float32"),
+    )
+    assert ingest(client).status_code == 200
+    assert loaded(client).chunks == ["replacement", "third"]
+
+
 def test_partial_embedding_batch_failure_does_not_publish_any_documents(client, monkeypatch):
     seed(client)
     assert upload(client, {"week1.pdf": "replacement", "new.pdf": "new"}).status_code == 200

@@ -1,5 +1,241 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 2 October 2026 — stable session state during backup collection
+
+Backup creation now takes a second transactional SQLite snapshot after copying
+all owner files and compares its validated authentication records with the
+initial database snapshot. Session creation, revocation, expiry cleanup, or
+credential remapping during owner collection therefore aborts without
+publishing an archive instead of mixing authentication and study-data states.
+
+Regression coverage creates a session deterministically while owner data is
+being copied and verifies that the unpublished archive is removed. Usage
+counters and concurrency leases may continue changing without invalidating a
+backup because they do not change which owner data is recoverable. This is a
+stable authentication/data boundary, not a simultaneous multi-file snapshot,
+archive encryption, distributed locking, or multi-host coordination.
+
+## 1 October 2026 — race-safe session database backup
+
+Backup creation now records the regular SQLite database's device and inode
+identity before opening it read-only, then checks that identity after open and
+again after SQLite's transactional backup completes. A concurrent local path
+replacement or symlink substitution therefore fails closed without publishing
+an archive, while ordinary writes to the same database remain compatible with
+SQLite's consistent backup snapshot.
+
+Regression coverage deterministically replaces the database immediately after
+SQLite opens it and separately rejects a symlinked database where the platform
+permits symlink creation. This pins the database used by one backup operation;
+it does not create a point-in-time transaction across SQLite and all owner
+directories, defend against a privileged process, or encrypt the archive.
+
+## 30 September 2026 — race-safe backup source copying
+
+Backup creation now opens each study file by descriptor and verifies that the
+opened regular file has the same device and inode identity as the path inspected
+immediately beforehand. Owner, data, and legacy-upload directories are checked
+again under the owner storage lock, and symlinked or non-directory storage paths
+fail closed. This prevents a concurrent local process from substituting another
+file or symlink between validation and copying into a recovery archive.
+
+Regression coverage deterministically replaces a snapshot between inspection
+and open, verifies that no archive is published, and rejects symlinked data and
+legacy-upload directories where the platform permits symlink creation. This is
+local backup hardening, not a multi-file point-in-time transaction, protection
+against a privileged process, archive encryption, or multi-host coordination.
+
+## 29 September 2026 — recoverable session-record validation
+
+Backup creation, verification, and restore now validate every persisted session
+record before accepting recovery data. Token hashes must retain the expected
+SHA-256 representation, owners must use server-generated identifiers, expiry
+values must be non-negative SQLite integers, and the expected sessions schema
+must remain queryable. A checksum-valid but structurally unusable authentication
+database therefore fails closed instead of being published as a verified backup.
+
+Regression coverage exercises malformed token hashes and expiry types during
+creation, a missing sessions table during verification and restore, and cleanup
+of failed archive and restore outputs. This validates local recovery integrity;
+it does not add accounts, cross-device recovery, archive encryption, or a
+multi-file point-in-time transaction across live study storage.
+
+## 28 September 2026 — backup owner consistency
+
+Backup validation now requires every owner referenced by the copied session
+database to be present in the archive owner list. This prevents a cross-file
+snapshot race or incomplete source directory from producing a backup that
+passes SQLite and checksum validation but restores an unusable authenticated
+session with no corresponding study-data directory.
+
+The check runs during backup creation, standalone verification, and restore.
+Failed creation removes the unpublished archive. Orphaned owner directories
+that are not referenced by an active session remain preservable for cautious
+recovery; this change only rejects missing data for a recorded session.
+
+## 27 September 2026 — deterministic complete-flow regression
+
+Added an API-level regression that follows one anonymous study session through
+ZIP upload, indexing, grounded answering, flashcard generation, case-insensitive
+same-name replacement, replacement-aware retrieval, and final deletion. It
+checks externally visible status at each state transition and inspects the
+mocked provider prompt to prove superseded text is no longer retrieved.
+
+The test uses synthetic PDF bytes, deterministic embeddings, and mocked model
+responses, so it makes no live AI request and does not validate the Render
+network, runtime configuration, persistent disk, or provider credentials. A
+deployed preview still needs the corresponding manual end-to-end and isolated
+restore drill before production promotion.
+
+## 26 September 2026 — portable Unicode recovery paths
+
+Backup creation and verification now compare paths using Unicode-normalized,
+case-folded names. Legacy PDFs or archive members that differ only by Unicode
+composition are rejected before publication or extraction, preventing one file
+from replacing or hiding another when a backup moves between Linux, macOS, and
+Windows filesystems with different normalization and case behavior.
+
+This check improves archive portability but does not replace filename
+sanitization in the upload path, archive encryption, or destination-specific
+Windows ACL controls.
+
+## 25 September 2026 — bounded backup expansion
+
+Backup verification and restoration now reject archives whose declared expanded
+contents exceed a configurable byte budget before any member is extracted. The
+default is 10 GiB and the recovery CLI accepts `--max-uncompressed-bytes` for a
+lower operational limit. Verification also caps archive member count and
+manifest size, preventing a crafted recovery archive from consuming unbounded
+disk, memory, or validation time. Failed restores still remove their private
+staging directory and never publish a partial destination.
+
+This is a local recovery safety bound, not archive encryption or an off-host
+retention policy. Operators must choose a limit above the expected verified
+backup size and continue to protect the archive itself.
+
+## 24 September 2026 — private recovery file permissions
+
+Backup creation and restoration now request owner-only permissions instead of
+inheriting a potentially permissive process umask. POSIX backup archives and
+restored files use mode `0600`; the restored data-directory root uses `0700`.
+The restore remains isolated in that private staging root until atomic
+publication. Regression coverage checks the published archive, restored root,
+session database, PDFs, and index files.
+
+These local permissions do not encrypt backup contents or replace off-host
+access controls. Windows deployments must retain equivalent ACL restrictions,
+and a future storage design still needs explicit encryption and key management.
+
+## 23 September 2026 — single-pass verified restore
+
+Hardened the portable recovery path so restore verifies and stream-extracts
+from one open archive. The exact bytes checked are now the bytes published to
+the new destination, removing the earlier verification-to-restore replacement
+window and avoiding whole-file reads during restore. Archive paths and legacy
+PDF names also reject case-insensitive collisions for Windows portability.
+
+Regression coverage verifies that restore opens the archive only once and that
+case-colliding members are rejected. This remains local-filesystem tooling, not
+an encrypted off-host backup service or a multi-host consistency mechanism.
+
+## 22 September 2026 — portable verified backup and recovery
+
+Added a provider-neutral command to create, verify, and restore a complete local
+data-directory backup. Creation uses SQLite's backup API and the existing
+per-owner storage locks, writes a SHA-256 manifest, and validates the resulting
+archive before publication. Verification rejects unsafe paths, unlisted files,
+checksum mismatches, corrupt SQLite state, and invalid FAISS/metadata snapshots.
+
+Restore is intentionally limited to a new destination and cannot merge with or
+overwrite live data. This enables repeatable recovery drills before choosing a
+paid disk or managed storage service, but it is not an automated backup schedule
+or off-host retention system. Archives contain private PDFs and hashed session
+credentials and therefore require encryption, access controls, and a deletion
+policy. Multi-host consistent backup remains part of the future durable-storage
+design.
+
+## 21 September 2026 — renewable concurrency leases
+
+Preserved the three local abuse-limit commits on the unchanged remote base
+`260e40c`; GitHub still had no equivalent remote branch at the start of this
+work. AI concurrency leases now run a daemon heartbeat that atomically extends
+their expiry while the owning request remains alive. This prevents a legitimate
+long ingestion from aging out and overlapping replacement capacity.
+
+Normal completion and handled failures stop the heartbeat and release every
+scope immediately. A terminated process cannot renew, so its slots still become
+reclaimable after `AI_CONCURRENCY_LEASE_SECONDS`. A prolonged SQLite or storage
+outage can prevent every renewal and eventually allow expiry; keep the window
+large enough for the intended deployment and use shared durable accounting
+before scaling to multiple hosts.
+
+Regression coverage advances a controlled clock beyond the original deadline
+and verifies that a live heartbeat still excludes another request. A spawned
+worker is also terminated without cleanup and its capacity is verified to
+recover after expiry. Final local validation passed 124 Python tests and 5
+JavaScript tests, Ruff, mypy, JavaScript syntax, Python compilation, dependency
+audit, and whitespace checks. Two upstream Starlette/httpx/AnyIO deprecation
+warnings remain. Tests use no live AI provider or user data.
+
+## 20 September 2026 — upload frequency and AI concurrency
+
+Continued the preserved two-commit local series on exact remote base `260e40c`;
+a fresh fetch still found no pushed equivalent. Added persistent, atomic hourly
+ZIP upload budgets per owner and across the service. The reservation occurs
+before application-level file reading, decompression, or staging, and failures
+remain charged. Edge body-size and flood controls are still required because the
+HTTP stack receives multipart data before route code runs.
+
+AI embedding, retrieval, and generation now acquire per-owner and service-wide
+SQLite leases shared by workers using the same data directory. Completion and
+handled failures release slots; expiry recovers capacity after worker death.
+Status, document deletion, and session revocation remain independent of these
+leases. Configure the expiry above the longest accepted ingestion: an operation
+that outlives it could overlap replacement capacity. The 21 September heartbeat
+work above supersedes this fixed-expiry limitation.
+
+Regression coverage includes spawned-process exclusion/release, expiry and
+exception recovery, rejection before provider work, upload rejection before
+application parsing, and control-route availability while AI capacity is full.
+Tests use mocked providers and synthetic documents; no live AI request, GitHub
+write, merge, or deployment is part of this work. Final local validation passed
+123 Python tests and 5 JavaScript tests, Ruff, mypy, JavaScript syntax, Python
+compilation, dependency audit, and whitespace checks. Two upstream
+Starlette/httpx/AnyIO deprecation warnings remain.
+
+Remaining abuse work: trusted-edge flood/per-IP controls and provider-side
+monetary budgets. Durable multi-host accounting, document/session storage,
+backup recovery, and end-to-end preview verification remain release work.
+
+## 19 September 2026 — cumulative per-session quotas
+
+Continued on the preserved local usage-budget commit `a260d64`, whose exact base
+is remote `260e40c`. A fresh fetch confirmed that GitHub still has no equivalent
+usage-limit branch, so no patch was reapplied and no remote state was changed.
+
+Added configurable caps for distinct active/pending PDF names and total retained
+indexed chunks per anonymous session. Checks execute under the existing owner
+lock and before snapshot mutation; the chunk projection runs before embeddings.
+Same-name or otherwise non-growing replacements remain possible when an older
+library exceeds a newly lowered cap. Rejection preserves active notes and pending
+uploads, while deletion releases both document-name and chunk capacity.
+
+Regression coverage verifies atomic mixed replacement/new-document rejection,
+lowered-cap repair, pre-provider chunk rejection, snapshot/pending preservation,
+and capacity release after deletion. Tests use synthetic PDFs and embeddings;
+no live provider requests, user data changes, deployment, or GitHub writes occur.
+Final local Linux validation: 119 Python tests and 5 JavaScript tests passed;
+Ruff, mypy, JavaScript syntax, Python compilation, dependency audit, and
+whitespace checks passed. Two upstream Starlette/httpx/AnyIO deprecation warnings
+remain. The expired virtual environment was recreated from the pinned development
+requirements; `socksio` was installed only in that environment for its runtime
+proxy and no dependency manifest changed.
+
+Remaining abuse work: upload-frequency and in-flight AI concurrency limits,
+trusted-edge fairness/flood controls, provider-side monetary budgets, and
+multi-host durable accounting. Durable document/session storage and backup
+recovery remain release blockers. See the accompanying handoff for final checks.
+
 ## 17 September 2026 — PDF replacement and deletion
 
 Recovered the handoff in order on `codex/study-snapshots-20260917`: `618c7ea` is the secure-session patch equivalent to `6a865e9`; `03e8c82` is the atomic-snapshot patch equivalent to `64d7c0b`. Both sit above the unchanged retrieval base `a352f6b`. Earlier checkpoint sections below are historical.
@@ -218,3 +454,31 @@ Current silent scans found no API-key-shaped value and no tracked `.env` filenam
 - In-memory locks protect one process only; run one Uvicorn worker until persistence is redesigned.
 - No real OpenAI request has been made on this branch.
 - The pinned FastAPI/Starlette TestClient currently emits an upstream deprecation warning about future `httpx2`; tests still pass.
+## 18 September 2026 — persistent usage budgets
+
+Fetched `origin/codex/study-snapshots-20260917` at `260e40c`; its secure-session
+and snapshot commits are equivalents of the earlier local handoff. Preserved
+the old local branch without reapplying either patch. Built this batch in a
+separate local worktree on that fetched base.
+
+Added atomic SQLite fixed-window budgets for new sessions, combined per-owner
+AI route attempts, and service-wide daily AI route attempts. Rejection occurs
+before document loading or provider work; failures are not refunded. Returning
+sessions and read/delete operations remain available. HTTP 429 includes a clear
+retry message and Retry-After; accounting errors fail closed. Counters survive
+worker restarts on the same storage. No IP/proxy trust assumptions are added.
+
+Regression coverage includes independent spawned workers, all-or-none budget
+reservation, expiry, cookie/header bypass attempts, owner isolation, all three
+AI routes, failure charging, and corrupted accounting. Tests use synthetic data
+and no live AI requests. Final local Linux validation: 117 Python tests and 5
+JavaScript tests passed; Ruff, mypy, JavaScript syntax, Python compilation, and
+whitespace checks passed. Two upstream deprecation warnings remain. Recreated
+the expired test environment; installed socksio only in that local environment
+for the runtime proxy. No dependency manifest changes were needed.
+
+Remaining: request counts are not dollar caps; fixed-window bursts, upload
+frequency, cumulative document/chunk quotas, in-flight concurrency, trusted-edge
+fairness and multi-host/durable accounting still need work. Next bounded batch:
+cumulative document/chunk limits with atomic replacement-aware quota checks.
+No pushes, GitHub writes, merges, or deployments were performed by this batch.

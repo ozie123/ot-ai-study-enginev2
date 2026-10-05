@@ -1,0 +1,425 @@
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import stat
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from backend import backups, sessions
+from backend.core import NoteStore
+
+
+def populated(root: Path, owner: str = "s_" + "a" * 32) -> tuple[Path, str]:
+    token, generated_owner, _ = sessions.create(root)
+    with sqlite3.connect(root / "sessions.sqlite3") as connection:
+        connection.execute(
+            "UPDATE sessions SET user_id = ? WHERE user_id = ?", (owner, generated_owner)
+        )
+    data = root / owner / "data"
+    store = NoteStore(data)
+    store.index = __import__("faiss").IndexFlatIP(2)
+    store.index.add(np.array([[1, 0]], dtype="float32"))
+    store.dim = 2
+    store.chunks = ["private notes"]
+    store.tags = ["week1"]
+    store.meta = [{"source": "notes.pdf", "page": 1, "is_gold": False}]
+    store.documents = {"notes.pdf": b"%PDF private"}
+    store.save()
+    return root, token
+
+
+def test_create_verify_and_restore_round_trip(tmp_path):
+    source, token = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    manifest = backups.create_backup(source, backup)
+    assert manifest["owners"] == ["s_" + "a" * 32]
+    assert backups.verify_backup(backup)["format"] == 1
+
+    restored = tmp_path / "restored"
+    backups.restore_backup(backup, restored)
+    assert sessions.lookup(restored, token)[0] == "s_" + "a" * 32
+    store = NoteStore(restored / ("s_" + "a" * 32) / "data")
+    assert store.load() is True
+    assert store.chunks == ["private notes"]
+    assert store.documents == {"notes.pdf": b"%PDF private"}
+    assert backups.verify_backup(backup) == manifest
+
+    if os.name != "nt":
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+        assert stat.S_IMODE(restored.stat().st_mode) == 0o700
+        for path in restored.rglob("*"):
+            if path.is_file():
+                assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_backup_refuses_overwrite_nested_output_and_existing_restore(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    existing = tmp_path / "existing.otai"
+    existing.write_bytes(b"keep")
+    with pytest.raises(FileExistsError):
+        backups.create_backup(source, existing)
+    assert existing.read_bytes() == b"keep"
+    with pytest.raises(ValueError, match="outside"):
+        backups.create_backup(source, source / "backup.otai")
+
+    backup = tmp_path / "valid.otai"
+    backups.create_backup(source, backup)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    with pytest.raises(FileExistsError, match="already exists"):
+        backups.restore_backup(backup, destination)
+
+
+def test_backup_rejects_session_owner_missing_from_archive(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    with sqlite3.connect(source / "sessions.sqlite3") as connection:
+        connection.execute("UPDATE sessions SET user_id = ?", ("s_" + "b" * 32,))
+
+    backup = tmp_path / "inconsistent.otai"
+    with pytest.raises(ValueError, match="study data missing from the backup"):
+        backups.create_backup(source, backup)
+    assert not backup.exists()
+
+
+def test_verify_and_restore_reject_session_owner_missing_from_archive(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+    with zipfile.ZipFile(valid) as archive:
+        files = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    database = tmp_path / "sessions.sqlite3"
+    database.write_bytes(files[backups.DATABASE_NAME])
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE sessions SET user_id = ?", ("s_" + "b" * 32,))
+    files[backups.DATABASE_NAME] = database.read_bytes()
+    manifest = json.loads(files[backups.MANIFEST_NAME])
+    database_entry = next(
+        item for item in manifest["files"] if item["path"] == backups.DATABASE_NAME
+    )
+    database_entry["size"] = len(files[backups.DATABASE_NAME])
+    database_entry["sha256"] = __import__("hashlib").sha256(
+        files[backups.DATABASE_NAME]
+    ).hexdigest()
+    files[backups.MANIFEST_NAME] = json.dumps(manifest).encode()
+
+    inconsistent = tmp_path / "inconsistent.otai"
+    with zipfile.ZipFile(inconsistent, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+
+    with pytest.raises(ValueError, match="study data missing from the backup"):
+        backups.verify_backup(inconsistent)
+    destination = tmp_path / "restored"
+    with pytest.raises(ValueError, match="study data missing from the backup"):
+        backups.restore_backup(inconsistent, destination)
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("token_hash", "not-a-token-hash"),
+        ("expires_at", "not-an-integer"),
+    ],
+)
+def test_backup_rejects_invalid_session_records(tmp_path, column, value):
+    source, _ = populated(tmp_path / "live")
+    with sqlite3.connect(source / "sessions.sqlite3") as connection:
+        connection.execute(f"UPDATE sessions SET {column} = ?", (value,))
+
+    backup = tmp_path / "invalid-session.otai"
+    with pytest.raises(ValueError, match="invalid record"):
+        backups.create_backup(source, backup)
+    assert not backup.exists()
+
+
+def test_verify_and_restore_reject_invalid_session_schema(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+    with zipfile.ZipFile(valid) as archive:
+        files = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    database = tmp_path / "sessions.sqlite3"
+    database.write_bytes(files[backups.DATABASE_NAME])
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE sessions RENAME TO unexpected_sessions")
+    files[backups.DATABASE_NAME] = database.read_bytes()
+    manifest = json.loads(files[backups.MANIFEST_NAME])
+    database_entry = next(
+        item for item in manifest["files"] if item["path"] == backups.DATABASE_NAME
+    )
+    database_entry["size"] = len(files[backups.DATABASE_NAME])
+    database_entry["sha256"] = __import__("hashlib").sha256(
+        files[backups.DATABASE_NAME]
+    ).hexdigest()
+    files[backups.MANIFEST_NAME] = json.dumps(manifest).encode()
+
+    invalid = tmp_path / "invalid-schema.otai"
+    with zipfile.ZipFile(invalid, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+
+    with pytest.raises(ValueError, match="schema is invalid"):
+        backups.verify_backup(invalid)
+    destination = tmp_path / "restored"
+    with pytest.raises(ValueError, match="schema is invalid"):
+        backups.restore_backup(invalid, destination)
+    assert not destination.exists()
+
+
+def rewrite_archive(source: Path, destination: Path, mutator):
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination, "w") as changed:
+        for info in original.infolist():
+            data = original.read(info.filename)
+            name, data = mutator(info.filename, data)
+            changed.writestr(name, data)
+
+
+def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+
+    corrupt = tmp_path / "corrupt.otai"
+    rewrite_archive(
+        backup,
+        corrupt,
+        lambda name, data: (name, data + b"changed")
+        if name.endswith("study.snapshot")
+        else (name, data),
+    )
+    with pytest.raises(ValueError, match="checksum"):
+        backups.verify_backup(corrupt)
+
+    extra = tmp_path / "extra.otai"
+    rewrite_archive(backup, extra, lambda name, data: (name, data))
+    with zipfile.ZipFile(extra, "a") as archive:
+        archive.writestr("unexpected", b"data")
+    with pytest.raises(ValueError, match="do not match"):
+        backups.verify_backup(extra)
+
+    traversal = tmp_path / "traversal.otai"
+    rewrite_archive(
+        backup,
+        traversal,
+        lambda name, data: ("../escape", data) if name == "sessions.sqlite3" else (name, data),
+    )
+    with pytest.raises(ValueError, match="unsafe"):
+        backups.verify_backup(traversal)
+
+    case_collision = tmp_path / "case-collision.otai"
+    rewrite_archive(backup, case_collision, lambda name, data: (name, data))
+    with zipfile.ZipFile(case_collision, "a") as archive:
+        archive.writestr("SESSIONS.SQLITE3", b"duplicate on Windows")
+    with pytest.raises(ValueError, match="unsafe or duplicate"):
+        backups.verify_backup(case_collision)
+
+
+def test_backup_rejects_unicode_normalization_collisions(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    owner = "s_" + "a" * 32
+    uploads = source / owner / "uploads"
+    uploads.mkdir(parents=True)
+    (uploads / "caf\N{LATIN SMALL LETTER E WITH ACUTE}.pdf").write_bytes(b"%PDF composed")
+    (uploads / "cafe\N{COMBINING ACUTE ACCENT}.pdf").write_bytes(b"%PDF decomposed")
+
+    with pytest.raises(ValueError, match="Legacy PDF names conflict"):
+        backups.create_backup(source, tmp_path / "colliding-source.otai")
+
+    clean_source, _ = populated(tmp_path / "clean")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(clean_source, backup)
+    collision = tmp_path / "unicode-collision.otai"
+    rewrite_archive(backup, collision, lambda name, data: (name, data))
+    with zipfile.ZipFile(collision, "a") as archive:
+        archive.writestr(f"{owner}/uploads/caf\N{LATIN SMALL LETTER E WITH ACUTE}.pdf", b"one")
+        archive.writestr(f"{owner}/uploads/cafe\N{COMBINING ACUTE ACCENT}.pdf", b"two")
+    with pytest.raises(ValueError, match="unsafe or duplicate"):
+        backups.verify_backup(collision)
+
+
+def test_backup_rejects_source_replacement_during_copy(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    owner = "s_" + "a" * 32
+    target = source / owner / "data" / "study.snapshot"
+    replacement = tmp_path / "replacement.snapshot"
+    replacement.write_bytes(b"different regular file")
+    real_open = backups.os.open
+    replaced = False
+
+    def replacing_open(path, flags, mode=0o777, **kwargs):
+        nonlocal replaced
+        if (
+            not replaced
+            and Path(path) == target
+            and flags & os.O_ACCMODE == os.O_RDONLY
+        ):
+            replaced = True
+            os.replace(replacement, target)
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(backups.os, "open", replacing_open)
+    backup = tmp_path / "raced.otai"
+    with pytest.raises(ValueError, match="Unsafe study data path"):
+        backups.create_backup(source, backup)
+    assert replaced is True
+    assert not backup.exists()
+
+
+def test_backup_rejects_session_database_replacement_after_open(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    target = source / backups.DATABASE_NAME
+    replacement = tmp_path / "replacement.sqlite3"
+    with sqlite3.connect(replacement) as connection:
+        connection.execute("CREATE TABLE replacement (value TEXT)")
+
+    real_connect = backups.sqlite3.connect
+    replaced = False
+
+    def replacing_connect(database, *args, **kwargs):
+        nonlocal replaced
+        connection = real_connect(database, *args, **kwargs)
+        if not replaced and kwargs.get("uri") is True:
+            replaced = True
+            os.replace(replacement, target)
+        return connection
+
+    monkeypatch.setattr(backups.sqlite3, "connect", replacing_connect)
+    backup = tmp_path / "raced-database.otai"
+    with pytest.raises(ValueError, match="Missing or unsafe sessions.sqlite3"):
+        backups.create_backup(source, backup)
+    assert replaced is True
+    assert not backup.exists()
+
+
+def test_backup_rejects_session_changes_while_copying_owners(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    real_copy = backups._copy_owner_files
+    changed = False
+
+    def changing_copy(root, staging, owner):
+        nonlocal changed
+        real_copy(root, staging, owner)
+        if not changed:
+            changed = True
+            sessions.create(root)
+
+    monkeypatch.setattr(backups, "_copy_owner_files", changing_copy)
+    backup = tmp_path / "mixed-session-state.otai"
+    with pytest.raises(ValueError, match="Session state changed"):
+        backups.create_backup(source, backup)
+    assert changed is True
+    assert not backup.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation requires Windows privileges")
+def test_backup_rejects_symlinked_session_database(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    target = source / backups.DATABASE_NAME
+    moved = tmp_path / backups.DATABASE_NAME
+    target.rename(moved)
+    target.symlink_to(moved)
+
+    backup = tmp_path / "symlinked-database.otai"
+    with pytest.raises(ValueError, match="Missing or unsafe sessions.sqlite3"):
+        backups.create_backup(source, backup)
+    assert not backup.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation requires Windows privileges")
+@pytest.mark.parametrize("directory", ["data", "uploads"])
+def test_backup_rejects_symlinked_owner_subdirectories(tmp_path, directory):
+    source, _ = populated(tmp_path / "live")
+    owner = "s_" + "a" * 32
+    target = source / owner / directory
+    target.mkdir(exist_ok=True)
+    moved = tmp_path / f"real-{directory}"
+    target.rename(moved)
+    target.symlink_to(moved, target_is_directory=True)
+
+    backup = tmp_path / f"symlinked-{directory}.otai"
+    with pytest.raises(ValueError, match="Unsafe .* directory"):
+        backups.create_backup(source, backup)
+    assert not backup.exists()
+
+
+def test_verify_rejects_invalid_snapshot_even_with_matching_hash(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+    invalid = tmp_path / "invalid.otai"
+
+    with zipfile.ZipFile(backup) as original:
+        files = {info.filename: original.read(info.filename) for info in original.infolist()}
+    snapshot_path = next(name for name in files if name.endswith("study.snapshot"))
+    files[snapshot_path] = b"not a snapshot"
+    manifest = json.loads(files["manifest.json"])
+    for item in manifest["files"]:
+        if item["path"] == snapshot_path:
+            item["size"] = len(files[snapshot_path])
+            item["sha256"] = __import__("hashlib").sha256(files[snapshot_path]).hexdigest()
+    files["manifest.json"] = json.dumps(manifest).encode()
+    with zipfile.ZipFile(invalid, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    with pytest.raises(ValueError, match="invalid for owner"):
+        backups.verify_backup(invalid)
+
+
+def test_restore_verifies_and_streams_from_one_open_archive(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+    real_open = backups._open_backup
+    opens = 0
+
+    def tracked_open(path):
+        nonlocal opens
+        opens += 1
+        return real_open(path)
+
+    monkeypatch.setattr(backups, "_open_backup", tracked_open)
+    restored = tmp_path / "restored"
+    backups.restore_backup(backup, restored)
+    assert opens == 1
+    assert (restored / "sessions.sqlite3").is_file()
+
+
+def test_verify_and_restore_enforce_uncompressed_size_limit(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+    with zipfile.ZipFile(backup) as archive:
+        expanded_size = sum(info.file_size for info in archive.infolist())
+
+    with pytest.raises(ValueError, match="uncompressed size limit"):
+        backups.verify_backup(backup, expanded_size - 1)
+
+    destination = tmp_path / "restored"
+    with pytest.raises(ValueError, match="uncompressed size limit"):
+        backups.restore_backup(backup, destination, expanded_size - 1)
+    assert not destination.exists()
+
+    with pytest.raises(ValueError, match="must be positive"):
+        backups.verify_backup(backup, 0)
+
+
+def test_verify_rejects_oversized_manifest_before_reading_it(tmp_path, monkeypatch):
+    backup = tmp_path / "oversized-manifest.otai"
+    monkeypatch.setattr(backups, "MAX_MANIFEST_BYTES", 8)
+    with zipfile.ZipFile(backup, "w") as archive:
+        archive.writestr("manifest.json", b"{}" * 5)
+
+    with pytest.raises(ValueError, match="manifest is too large"):
+        backups.verify_backup(backup)
+
+    monkeypatch.setattr(backups, "MAX_BACKUP_MEMBERS", 0)
+    with pytest.raises(ValueError, match="too many files"):
+        backups.verify_backup(backup)

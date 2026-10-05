@@ -1,5 +1,52 @@
 # Changelog
 
+## Backup owner consistency — Unreleased
+
+- Reject backups whose session database references an owner missing from the
+  archive, preventing successful verification of an unusable restored session.
+- Apply the consistency check during creation, standalone verification, and
+  restoration; failed creation removes the incomplete archive.
+
+## End-to-end study flow verification — Unreleased
+
+- Add one deterministic API-level regression covering session startup, upload,
+  indexing, grounded answers, flashcards, same-name replacement, and deletion.
+- Verify replacement context excludes superseded text and final deletion leaves
+  no indexed chunks, documents, tags, or library entries.
+- Keep the flow offline with synthetic PDF bytes, deterministic embeddings, and
+  mocked Responses API output; no live AI request or deployment is required.
+
+## Portable backup and recovery — Unreleased
+
+- Add a provider-neutral command that creates a complete data-directory archive
+  using SQLite's backup API and per-owner storage locks.
+- Verify and stream-extract restore data from one open archive, eliminating a
+  verification-to-restore replacement window and avoiding whole-file reads.
+- Reject case-insensitive archive and legacy-PDF path collisions so backups are
+  portable to Windows filesystems.
+- Reject Unicode-normalization collisions so recovery paths remain distinct
+  across Linux, macOS, and Windows filesystems.
+- Create backup archives and restored private files with owner-only permissions;
+  restored data-directory roots are accessible only to their owner.
+- Bound backup verification and restore expansion by total bytes, member count,
+  and manifest size before extraction.
+- Verify SHA-256 checksums, safe paths, the session database, and each stored
+  FAISS/metadata snapshot before accepting an archive.
+- Restore only into a new directory so recovery drills cannot merge with or
+  overwrite live study data.
+- Document archive sensitivity, off-host retention, and recovery-test steps.
+
+## Abuse and cumulative resource limits — Unreleased
+
+- Persist atomic fixed-window budgets for new sessions, per-owner AI attempts, and service-wide AI attempts in the session SQLite database.
+- Return HTTP 429 with `Retry-After` before paid provider work; fail closed when usage accounting is unavailable.
+- Cap distinct active/pending PDF names and total retained indexed chunks per session, in addition to existing byte and per-ingestion limits.
+- Make cumulative checks replacement-aware: same-name/non-growing repairs remain possible, rejected mutations preserve the snapshot, and deletion releases capacity.
+- Add atomic per-owner and service-wide ZIP upload-frequency budgets before application parsing or decompression.
+- Bound simultaneous AI work with expiring per-owner and service-wide SQLite leases shared by local workers; keep status, deletion, and session revocation available.
+- Renew live AI leases in the background so long healthy operations retain capacity; preserve expiry-based recovery when a worker dies or accounting remains unavailable.
+- Add multi-process request-budget and concurrency-lease tests plus document/chunk quota, failure-preservation, control-route availability, and pre-provider rejection regressions.
+
 ## Transactional PDF replacement and deletion — Unreleased
 
 - Include active and pending PDF bytes in the atomic index snapshot. Stage uploads until the entire ingestion batch succeeds; retain working files and vectors on parse, embedding, or save failures.

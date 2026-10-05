@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 try:
-    from . import sessions
+    from . import sessions, usage_limits
     from .ai_service import (
         EMBEDDING_MODEL,
         RESPONSE_MODEL,
@@ -36,6 +36,7 @@ try:
     from .storage_lock import storage_lock
 except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
     import sessions  # type: ignore[no-redef]
+    import usage_limits  # type: ignore[no-redef]
     from ai_service import (  # type: ignore[no-redef]
         EMBEDDING_MODEL,
         RESPONSE_MODEL,
@@ -91,10 +92,40 @@ MAX_TOTAL_UNCOMPRESSED_BYTES = _env_int(
 MAX_USER_STORAGE_BYTES = _env_int(
     "MAX_USER_STORAGE_BYTES", 100 * 1024 * 1024, minimum=1024, maximum=1024 * 1024 * 1024
 )
+MAX_DOCUMENTS_PER_SESSION = _env_int(
+    "MAX_DOCUMENTS_PER_SESSION", 50, minimum=1, maximum=500
+)
 MAX_PDF_PAGES = _env_int("MAX_PDF_PAGES", 300, minimum=1, maximum=2000)
 MAX_PDF_TEXT_CHARS = _env_int("MAX_PDF_TEXT_CHARS", 2_000_000, minimum=1000, maximum=10_000_000)
 MAX_INGEST_CHUNKS = _env_int("MAX_INGEST_CHUNKS", 2500, minimum=1, maximum=10_000)
+MAX_INDEXED_CHUNKS_PER_SESSION = _env_int(
+    "MAX_INDEXED_CHUNKS_PER_SESSION", 10_000, minimum=1, maximum=100_000
+)
 MAX_COMPRESSION_RATIO = 100
+MAX_NEW_SESSIONS_PER_HOUR = _env_int(
+    "MAX_NEW_SESSIONS_PER_HOUR", 100, minimum=1, maximum=100_000
+)
+MAX_AI_REQUESTS_PER_SESSION_HOUR = _env_int(
+    "MAX_AI_REQUESTS_PER_SESSION_HOUR", 60, minimum=1, maximum=100_000
+)
+MAX_AI_REQUESTS_PER_DAY = _env_int(
+    "MAX_AI_REQUESTS_PER_DAY", 500, minimum=1, maximum=1_000_000
+)
+MAX_UPLOADS_PER_SESSION_HOUR = _env_int(
+    "MAX_UPLOADS_PER_SESSION_HOUR", 20, minimum=1, maximum=100_000
+)
+MAX_UPLOADS_PER_HOUR = _env_int(
+    "MAX_UPLOADS_PER_HOUR", 200, minimum=1, maximum=1_000_000
+)
+MAX_CONCURRENT_AI_REQUESTS_PER_SESSION = _env_int(
+    "MAX_CONCURRENT_AI_REQUESTS_PER_SESSION", 1, minimum=1, maximum=1000
+)
+MAX_CONCURRENT_AI_REQUESTS = _env_int(
+    "MAX_CONCURRENT_AI_REQUESTS", 4, minimum=1, maximum=10_000
+)
+AI_CONCURRENCY_LEASE_SECONDS = _env_int(
+    "AI_CONCURRENCY_LEASE_SECONDS", 3600, minimum=60, maximum=86_400
+)
 READ_CHUNK_BYTES = 1024 * 1024
 
 SESSION_COOKIE_SECURE = os.getenv("OT_SESSION_COOKIE_SECURE", "true").lower()
@@ -228,6 +259,7 @@ def start_session(request: Request, response: Response):
     if existing:
         user_id, expires_at = existing
     else:
+        usage_limits.consume(USERS_DIR, [("session:global:hour", MAX_NEW_SESSIONS_PER_HOUR, 3600)])
         token, user_id, expires_at = sessions.create(USERS_DIR)
         response.set_cookie(
             SESSION_COOKIE_NAME,
@@ -252,6 +284,39 @@ def end_session(request: Request, response: Response, user_id: str = Depends(get
         samesite="strict",
     )
     return {"ended": True}
+
+
+def reserve_ai_request(user_id: str) -> None:
+    usage_limits.consume(
+        USERS_DIR,
+        [
+            ("ai:global:day", MAX_AI_REQUESTS_PER_DAY, 86400),
+            (f"ai:owner:{user_id}:hour", MAX_AI_REQUESTS_PER_SESSION_HOUR, 3600),
+        ],
+    )
+
+
+def reserve_upload(user_id: str) -> None:
+    usage_limits.consume(
+        USERS_DIR,
+        [
+            ("upload:global:hour", MAX_UPLOADS_PER_HOUR, 3600),
+            (f"upload:owner:{user_id}:hour", MAX_UPLOADS_PER_SESSION_HOUR, 3600),
+        ],
+    )
+
+
+@contextmanager
+def ai_request_slot(user_id: str) -> Iterator[None]:
+    with usage_limits.lease(
+        USERS_DIR,
+        [
+            ("ai-concurrency:global", MAX_CONCURRENT_AI_REQUESTS),
+            (f"ai-concurrency:owner:{user_id}", MAX_CONCURRENT_AI_REQUESTS_PER_SESSION),
+        ],
+        seconds=AI_CONCURRENCY_LEASE_SECONDS,
+    ):
+        yield
 
 
 def validate_tag(tag: str | None) -> str | None:
@@ -514,6 +579,7 @@ async def upload_zip(file: UploadFile = File(...), user_id: str = Depends(get_us
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Please upload a ZIP file.")
 
+    reserve_upload(user_id)
     try:
         content = await read_upload_limited(file)
     finally:
@@ -527,7 +593,16 @@ def stage_pdfs(user_id: str, pdfs: list[tuple[str, bytes]]) -> None:
     with user_lock(user_id):
         store = document_store(user_id)
         assert store.documents is not None
+        current_names = set(store.documents) | set(store.pending)
         pending = {**store.pending, **{name.casefold(): content for name, content in pdfs}}
+        projected_names = set(store.documents) | set(pending)
+        if (
+            len(projected_names) > MAX_DOCUMENTS_PER_SESSION
+            and len(projected_names) > len(current_names)
+        ):
+            raise HTTPException(
+                413, "This study session has reached its document-count limit."
+            )
         # Count active AND staged bytes; rollback needs both versions on disk.
         projected_size = sum(map(len, store.documents.values())) + sum(map(len, pending.values()))
         if projected_size > MAX_USER_STORAGE_BYTES:
@@ -566,6 +641,7 @@ def ingest_user_pdfs(
 ):
     requested_tag = validate_tag(payload.tag if payload else None)
     api_key = resolve_api_key(authorization)
+    reserve_ai_request(user_id)
     with user_lock(user_id):
         store = document_store(user_id, api_key)
         assert store.documents is not None
@@ -615,11 +691,27 @@ def ingest_user_pdfs(
                 )
             changed.add(name)
             batches.append((chunks, requested_tag or infer_tag_from_filename(name), metadata))
+        retained_chunks = sum(
+            str(metadata.get("source", "")).casefold() not in changed
+            for metadata in store.meta
+        )
+        projected_chunks = retained_chunks + len(all_chunks)
+        if (
+            projected_chunks > MAX_INDEXED_CHUNKS_PER_SESSION
+            and projected_chunks > len(store.chunks)
+        ):
+            raise HTTPException(
+                413, "This study session has reached its indexed-chunk limit."
+            )
         store.remove_documents(changed)
         try:
-            for chunks, tag, metadata in batches:
-                store.add_chunks(chunks, tag=tag, meta_list=metadata)
+            if batches:
+                with ai_request_slot(user_id):
+                    for chunks, tag, metadata in batches:
+                        store.add_chunks(chunks, tag=tag, meta_list=metadata)
         except Exception as error:
+            if isinstance(error, HTTPException):
+                raise
             raise_openai_http_error(error)
         if store.pending:
             store.documents.update(store.pending)
@@ -642,6 +734,7 @@ def chat_api(
 ):
     tag = validate_tag(payload.tag)
     api_key = resolve_api_key(authorization)
+    reserve_ai_request(user_id)
     store = load_store_for_user(user_id, api_key=api_key)
 
     if not store.chunks:
@@ -663,21 +756,20 @@ def chat_api(
     is_summary = any(term in payload.question.lower() for term in summary_terms)
     query = payload.question
     try:
-        hits = select_hits(store, query, k=8 if is_summary else 4, tag=tag)
+        with ai_request_slot(user_id):
+            hits = select_hits(store, query, k=8 if is_summary else 4, tag=tag)
+            if not hits:
+                return {"status": "not_found", "answer": "Not found in your notes.", "sources": []}
+            context = "\n\n---\n\n".join(hit[2] for hit in hits)
+            answer = generate_answer(
+                create_openai_client(api_key),
+                context=context,
+                question=payload.question.strip(),
+                mode=payload.mode,
+            )
     except Exception as error:
-        raise_openai_http_error(error)
-    if not hits:
-        return {"status": "not_found", "answer": "Not found in your notes.", "sources": []}
-
-    context = "\n\n---\n\n".join(hit[2] for hit in hits)
-    try:
-        answer = generate_answer(
-            create_openai_client(api_key),
-            context=context,
-            question=payload.question.strip(),
-            mode=payload.mode,
-        )
-    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
         raise_openai_http_error(error)
     if answer.strip().casefold() == "not found in your notes.":
         return {"status": "not_found", "answer": answer, "sources": []}
@@ -692,6 +784,7 @@ def flashcards_api(
 ):
     tag = validate_tag(payload.tag)
     api_key = resolve_api_key(authorization)
+    reserve_ai_request(user_id)
     store = load_store_for_user(user_id, api_key=api_key)
 
     if not store.chunks:
@@ -703,19 +796,18 @@ def flashcards_api(
         tag = validate_tag(re.sub(r"\s+", "", topic.lower()))
         query = "main concepts definitions examples key points overview"
     try:
-        hits = select_hits(store, query, k=8, tag=tag)
+        with ai_request_slot(user_id):
+            hits = select_hits(store, query, k=8, tag=tag)
+            if not hits:
+                return {"flashcards": [], "message": "No matching notes were found."}
+            context = "\n\n---\n\n".join(hit[2] for hit in hits)
+            cards = generate_flashcards(
+                create_openai_client(api_key),
+                context=context,
+                topic=topic,
+            )
     except Exception as error:
-        raise_openai_http_error(error)
-    if not hits:
-        return {"flashcards": [], "message": "No matching notes were found."}
-
-    context = "\n\n---\n\n".join(hit[2] for hit in hits)
-    try:
-        cards = generate_flashcards(
-            create_openai_client(api_key),
-            context=context,
-            topic=topic,
-        )
-    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
         raise_openai_http_error(error)
     return {"flashcards": cards, "sources": build_sources(hits)}

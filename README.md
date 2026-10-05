@@ -57,6 +57,7 @@ Persistence uses one `study.snapshot` per session, containing vectors, chunk met
 ```text
 backend/
   ai_service.py       OpenAI client configuration, prompts, output contracts, error mapping
+  backups.py          Portable backup creation, verification, and safe empty-path restore
   core.py             PDF chunking, embeddings, FAISS store, and optional legacy CLI
   server.py           FastAPI routes, validation, upload safety, persistence boundaries
   storage_lock.py     Per-owner Windows/POSIX file locking for API mutations
@@ -122,6 +123,16 @@ The optional CLI remains available:
 python -m backend.core
 ```
 
+Local recovery commands are available through `python -m backend.backups`.
+Verification and restoration reject more than 10 GiB of expanded archive data
+by default; use `--max-uncompressed-bytes` to set a lower deployment-specific
+limit. Archive paths that collide after case folding or Unicode normalization
+are rejected for cross-platform safety. Backup creation also rejects symlinked
+storage paths, study files replaced between inspection and opening, session
+databases whose filesystem identity changes while SQLite is copying them, and
+session creation or revocation during owner-file collection. Keep backups
+encrypted and access-controlled outside the application.
+
 ## Environment variables
 
 | Variable | Required | Default | Purpose |
@@ -138,9 +149,16 @@ python -m backend.core
 | `MAX_PDF_BYTES` | No | `12582912` | Maximum expanded size per PDF |
 | `MAX_TOTAL_UNCOMPRESSED_BYTES` | No | `52428800` | Maximum expanded PDFs per ZIP |
 | `MAX_USER_STORAGE_BYTES` | No | `104857600` | Maximum stored PDFs per session |
+| `MAX_DOCUMENTS_PER_SESSION` | No | `50` | Maximum distinct active or pending PDF names per session |
 | `MAX_PDF_PAGES` | No | `300` | Maximum pages per ingested PDF |
 | `MAX_PDF_TEXT_CHARS` | No | `2000000` | Maximum extracted characters per PDF |
 | `MAX_INGEST_CHUNKS` | No | `2500` | Maximum new chunks in one ingestion |
+| `MAX_INDEXED_CHUNKS_PER_SESSION` | No | `10000` | Maximum indexed chunks retained per session |
+| `MAX_UPLOADS_PER_SESSION_HOUR` | No | `20` | ZIP upload attempts per session per UTC-aligned hour |
+| `MAX_UPLOADS_PER_HOUR` | No | `200` | ZIP upload attempts across the service per UTC-aligned hour |
+| `MAX_CONCURRENT_AI_REQUESTS_PER_SESSION` | No | `1` | Simultaneous embedding/retrieval/generation operations per session |
+| `MAX_CONCURRENT_AI_REQUESTS` | No | `4` | Simultaneous AI operations across the service |
+| `AI_CONCURRENCY_LEASE_SECONDS` | No | `3600` | Renewal horizon and crash/accounting-outage recovery window for an AI slot |
 | `LOG_LEVEL` | No | `INFO` | Application log level |
 
 Changing the embedding model requires rebuilding every FAISS index because vector dimensions and semantics can differ.
@@ -190,7 +208,9 @@ For **already authenticated server-issued sessions only**, the first mutation mi
 
 The snapshot is the sole active store; PDFs are ZIP entries inside it, not separate files under `uploads/`. A successful deletion removes the PDF bytes and metadata from that store. Failed/interrupted `snapshot-*.tmp` candidates are ignored on reload and removed under the owner lock at the next mutation. This is application deletion, not secure erasure of disks, backups, or answers already displayed. Backups require their own retention policy.
 
-Active and pending PDF bytes both count toward `MAX_USER_STORAGE_BYTES`, so replacing a document requires room for its rollback copy. Saving rewrites the whole snapshot and temporarily requires space for another complete snapshot, including vectors; reads load the PDF bytes too. Keep the current bounded library size and single-worker deployment default. OS locks protect cooperating API processes on local Windows/POSIX filesystems; network filesystems and multiple hosts are unsupported. The optional legacy CLI does not take these API locks and must not write live session directories. Atomic replacement protects against process crashes, but directory fsync, backup rotation, and recovery from disk corruption/power loss are not implemented.
+Active and pending PDF bytes both count toward `MAX_USER_STORAGE_BYTES`, so replacing a document requires room for its rollback copy. The union of active and pending canonical filenames counts toward `MAX_DOCUMENTS_PER_SESSION`; a same-name replacement does not consume another document slot. `MAX_INDEXED_CHUNKS_PER_SESSION` applies after removing the old chunks for every successful replacement. Existing libraries above a newly lowered count cap may make non-growing replacements or deletions, allowing them to be repaired without weakening the cap for new growth. Rejections preserve the active snapshot and staged pending uploads. Deleting a document releases its document and chunk capacity.
+
+Saving rewrites the whole snapshot and temporarily requires space for another complete snapshot, including vectors; reads load the PDF bytes too. Keep the current bounded library size and single-worker deployment default. OS locks protect cooperating API processes on local Windows/POSIX filesystems; network filesystems and multiple hosts are unsupported. The optional legacy CLI does not take these API locks and must not write live session directories. Atomic replacement protects against process crashes, but directory fsync, backup rotation, and recovery from disk corruption/power loss are not implemented.
 
 ## Tests and checks
 
@@ -204,7 +224,7 @@ python -m pip_audit -r backend/requirements.txt
 python -m compileall -q backend
 ```
 
-The test suite does not make live OpenAI requests. It mocks successful Responses API output, structured flashcards, embedding batches, malformed output, authentication failure, rate limiting, timeouts, connection failure, and provider unavailability.
+The test suite does not make live OpenAI requests. It mocks successful Responses API output, structured flashcards, embedding batches, malformed output, authentication failure, rate limiting, timeouts, connection failure, and provider unavailability. A deterministic API-level journey also covers session startup, upload, indexing, answers, flashcards, same-name replacement, replacement-aware retrieval, and deletion.
 
 ## Render deployment
 
@@ -231,6 +251,33 @@ A later persistence release can use either:
 - object storage plus a database/vector store after cost, privacy, deletion, and migration design is approved.
 
 Do not add a disk or database to the live service without a migration and retention plan.
+
+### Backup and recovery
+
+The repository includes a provider-neutral backup command for the complete
+`OT_DATA_DIR`. The archive contains PDF contents and hashed session credentials,
+so store it encrypted with access controls and a retention/deletion policy. The
+creator takes each owner's storage lock, uses SQLite's backup API, writes a
+SHA-256 manifest, and verifies the completed archive before reporting success.
+
+```bash
+python -m backend.backups create --data-dir backend/users --output /secure/ot-ai-backup.otai
+python -m backend.backups verify --backup /secure/ot-ai-backup.otai
+python -m backend.backups restore --backup /secure/ot-ai-backup.otai --destination /restore-test/users
+```
+
+Restore deliberately accepts only a destination that does not exist; it never
+merges with or overwrites live data. Verification and extraction happen in one
+streaming pass from the same open archive, and case-insensitive path collisions
+are rejected for Windows portability. On POSIX systems, created archives and
+restored files use mode `0600`, while restored data roots use `0700`; retain
+equivalent owner-only access controls on other platforms. Test restoration to a
+separate path, start the application with `OT_DATA_DIR` pointing there, and
+verify the study flow before scheduling backups. The tool validates checksums,
+the session database schema and record formats, every session owner's presence
+in the archive, and every FAISS/metadata snapshot. Copy the verified archive
+off-host: a backup on the same ephemeral filesystem does not protect against a
+Render restart.
 
 ## Security and privacy
 
@@ -293,3 +340,59 @@ Restore a verified backup of the complete session snapshot. Corrupt snapshots an
 5. Portfolio readiness — screenshots, demo-safe sample material, automated CI, release tags, and product metrics.
 
 See [Audit and roadmap](docs/AUDIT_AND_ROADMAP.md) for priorities and deployment risk.
+## Request and concurrency budgets (20 September 2026)
+
+Before exposing the app publicly, review these positive integer settings:
+
+| Setting | Default | Scope |
+| --- | --- | --- |
+| `MAX_NEW_SESSIONS_PER_HOUR` | 100 | New anonymous sessions across the service |
+| `MAX_AI_REQUESTS_PER_SESSION_HOUR` | 60 | Ingest, chat and flashcards combined per owner |
+| `MAX_AI_REQUESTS_PER_DAY` | 500 | Those AI route attempts combined across all owners |
+| `MAX_UPLOADS_PER_SESSION_HOUR` | 20 | ZIP upload attempts per owner |
+| `MAX_UPLOADS_PER_HOUR` | 200 | ZIP upload attempts across all owners |
+| `MAX_CONCURRENT_AI_REQUESTS_PER_SESSION` | 1 | In-flight AI work per owner |
+| `MAX_CONCURRENT_AI_REQUESTS` | 4 | In-flight AI work across all owners |
+
+Budgets use UTC-aligned fixed windows, atomically reserved in `usage_limits` in
+the existing `sessions.sqlite3`. Workers sharing the same local data directory
+share counters, including after restart. Preserve this database in backups.
+Schema creation is additive; no existing sessions or documents are removed.
+Returning sessions do not consume the new-session budget. New cookies and
+client-supplied forwarding headers cannot reset the service-wide budgets.
+BYOK requests are also limited. All applicable budgets reserve together before
+loading notes, parsing PDFs or making AI calls; failed/empty attempts still count
+and are not refunded. Authentication, CSRF, tags and API-key availability are
+checked first. A failed session mint also retains its reservation.
+
+Upload attempts reserve both hourly budgets before the application reads or
+decompresses the uploaded file; invalid or failed attempts are not refunded.
+This is application-level protection and does not prevent a reverse proxy from
+receiving a request body. Configure body-size and request-rate enforcement at a
+trusted edge as well.
+
+Embedding, retrieval and generation hold atomic per-owner and global SQLite
+leases. Workers sharing one local data directory therefore enforce the same
+limits. A heartbeat renews healthy leases every third of
+`AI_CONCURRENCY_LEASE_SECONDS`; normal completion and provider failures release
+them immediately. If a worker dies, renewal stops and the slot recovers after
+the configured window. Set that window long enough to tolerate a temporary
+SQLite/storage outage: if every renewal fails for the entire window, another
+request can eventually reclaim the slot. Status, document deletion and session
+revocation neither acquire nor wait for an AI lease.
+
+Exhaustion returns HTTP 429 with `Retry-After` seconds and a user-readable retry
+message. Accounting storage errors fail closed with HTTP 503. Status, document
+deletion and session revocation remain available when AI budgets are exhausted.
+
+These are **request caps, not a monetary spending guarantee**: one ingest can
+perform multiple embedding calls, and SDK retries can make additional calls.
+Use provider-side project budgets/alerts as well. A fixed window permits a burst
+on each side of its boundary. There is no per-IP fairness, token accounting,
+multi-host coordination, or edge/network flood protection.
+One attacker can exhaust a shared budget and deny service to other visitors;
+use a trusted edge limiter before broader public access. Do not trust arbitrary
+forwarded IP headers. Existing ZIP/PDF/storage byte and cumulative document/chunk
+limits remain in effect.
+Separate or ephemeral data directories reset/separate quotas, so these limits
+must not be presented as distributed or durable hosting protection.
