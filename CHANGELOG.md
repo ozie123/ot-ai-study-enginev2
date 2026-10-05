@@ -1,5 +1,10 @@
 # Changelog
 
+## PDF parser security update — Unreleased
+
+- Upgrade pypdf from 6.16.1 to 6.19.0 to include the published parser resource-exhaustion fixes.
+- Exercise backup creation, verification, and restoration through the CLI, then confirm restored API access and deletion isolation with a synthetic session and mocked AI.
+
 ## Backup owner consistency — Unreleased
 
 - Reject backups whose session database references an owner missing from the

@@ -4,13 +4,17 @@ import json
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
-from backend import backups, sessions
+from backend import backups, server, sessions
 from backend.core import NoteStore
 
 
@@ -55,6 +59,75 @@ def test_create_verify_and_restore_round_trip(tmp_path):
         for path in restored.rglob("*"):
             if path.is_file():
                 assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_cli_restore_retains_api_access_and_isolates_later_deletion(tmp_path, monkeypatch):
+    source, token = populated(tmp_path / "source")
+    backup = tmp_path / "backup.otai"
+    restored = tmp_path / "restored"
+    owner = sessions.lookup(source, token)[0]
+    snapshot = source / owner / "data" / "study.snapshot"
+    original_snapshot = snapshot.read_bytes()
+    commands = [
+        ["create", "--data-dir", str(source), "--output", str(backup)],
+        ["verify", "--backup", str(backup)],
+        ["restore", "--backup", str(backup), "--destination", str(restored)],
+    ]
+    for command in commands:
+        result = subprocess.run(
+            [sys.executable, "-m", "backend.backups", *command],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"Backup {command[0]} succeeded" in result.stdout
+
+    monkeypatch.setattr(server, "USERS_DIR", restored)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        NoteStore,
+        "_embed",
+        lambda self, texts: np.array([[1, 0]] * len(texts), dtype="float32"),
+    )
+    prompts = []
+
+    def response(**kwargs):
+        prompts.append(kwargs)
+        return SimpleNamespace(output_text="The restored notes are available.")
+
+    provider = SimpleNamespace(responses=SimpleNamespace(create=response))
+    monkeypatch.setattr(server, "create_openai_client", lambda api_key: provider)
+    with TestClient(
+        server.app, base_url="https://testserver", headers={"X-Study-Request": "1"}
+    ) as client:
+        assert client.get("/status").status_code == 401
+        client.cookies.set(server.SESSION_COOKIE_NAME, token)
+        status = client.get("/status")
+        assert status.status_code == 200
+        assert status.json()["document_files"] == [
+            {"name": "notes.pdf", "indexed": True, "pending": False}
+        ]
+        answer = client.post(
+            "/chat",
+            json={"question": "What do my restored notes say?"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert answer.status_code == 200
+        assert answer.json()["sources"] == ["notes.pdf (page 1)"]
+        assert "private notes" in prompts[-1]["input"][1]["content"]
+        assert client.delete("/documents/notes.pdf").status_code == 200
+        assert client.get("/status").json()["documents"] == 0
+
+    # Restored mutations persist but cannot change the source or recovery archive.
+    reloaded = NoteStore(restored / owner / "data")
+    assert reloaded.load()
+    assert reloaded.documents == {}
+    assert snapshot.read_bytes() == original_snapshot
+    assert sessions.lookup(source, token)[0] == owner
+    assert backups.verify_backup(backup)["owners"] == [owner]
 
 
 def test_backup_refuses_overwrite_nested_output_and_existing_restore(tmp_path):
