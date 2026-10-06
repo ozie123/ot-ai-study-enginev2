@@ -61,6 +61,41 @@ def test_create_verify_and_restore_round_trip(tmp_path):
                 assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_create_verifies_before_publication_and_preserves_racing_output(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+    verify = backups.verify_backup
+
+    def competing_writer(path, limit):
+        assert not output.exists()
+        result = verify(path, limit)
+        output.write_bytes(b"another writer's backup")
+        return result
+
+    monkeypatch.setattr(backups, "verify_backup", competing_writer)
+    with pytest.raises(FileExistsError):
+        backups.create_backup(source, output)
+    assert output.read_bytes() == b"another writer's backup"
+    assert not list(tmp_path.glob(".backup.otai.*.tmp"))
+
+
+def test_create_failed_verification_never_publishes_or_removes_other_output(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+
+    def failing_verification(path, limit):
+        assert path != output
+        assert not output.exists()
+        output.write_bytes(b"independent file")
+        raise ValueError("verification failed")
+
+    monkeypatch.setattr(backups, "verify_backup", failing_verification)
+    with pytest.raises(ValueError, match="verification failed"):
+        backups.create_backup(source, output)
+    assert output.read_bytes() == b"independent file"
+    assert not list(tmp_path.glob(".backup.otai.*.tmp"))
+
+
 def test_cli_restore_retains_api_access_and_isolates_later_deletion(tmp_path, monkeypatch):
     source, token = populated(tmp_path / "source")
     backup = tmp_path / "backup.otai"

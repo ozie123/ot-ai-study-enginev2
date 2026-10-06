@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 6 October 2026 — verified, exclusive backup publication
+
+Recovered October 5 checkout retained: the earlier fifteen changes are preserved
+in recovery commit `a0571f1`, followed by `29d80ed` with pypdf 6.19.0 and an
+isolated CLI-to-API restore regression. Do not apply the old series over it.
+
+Backup creation now verifies its private temporary archive before publishing
+with an exclusive hard link. A concurrent output file is never overwritten or
+removed by failure cleanup. Regression tests cover competing publication and
+verification failure. The output filesystem must support hard links; unsupported
+filesystems fail without publication. This does not add power-loss durability
+or change restore-directory publication, encryption, or off-host retention.
+
 ## 2 October 2026 — stable session state during backup collection
 
 Backup creation now takes a second transactional SQLite snapshot after copying

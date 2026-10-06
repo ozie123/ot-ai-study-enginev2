@@ -265,13 +265,13 @@ def create_backup(
                 archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, sort_keys=True))
                 for item in files:
                     archive.write(staging / str(item["path"]), str(item["path"]))
-            os.replace(temporary_output, output)
-        verify_backup(output, max_uncompressed_bytes)
+            verify_backup(temporary_output, max_uncompressed_bytes)
+            # Both paths share a filesystem. Linking publishes atomically and
+            # fails if another writer has claimed the destination meanwhile.
+            os.link(temporary_output, output)
         return manifest
-    except Exception:
+    finally:
         temporary_output.unlink(missing_ok=True)
-        output.unlink(missing_ok=True)
-        raise
 
 
 def _safe_members(
