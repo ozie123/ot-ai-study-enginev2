@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 try:
     from . import sessions, usage_limits
@@ -80,6 +81,9 @@ USERS_DIR = resolve_data_root(os.getenv("OT_DATA_DIR"))
 
 MAX_UPLOAD_BYTES = _env_int(
     "MAX_UPLOAD_BYTES", 25 * 1024 * 1024, minimum=1024, maximum=100 * 1024 * 1024
+)
+MAX_UPLOAD_REQUEST_OVERHEAD_BYTES = _env_int(
+    "MAX_UPLOAD_REQUEST_OVERHEAD_BYTES", 64 * 1024, minimum=1024, maximum=1024 * 1024
 )
 MAX_ZIP_MEMBERS = _env_int("MAX_ZIP_MEMBERS", 50, minimum=1, maximum=500)
 MAX_PDF_BYTES = _env_int("MAX_PDF_BYTES", 12 * 1024 * 1024, minimum=1024, maximum=50 * 1024 * 1024)
@@ -160,6 +164,69 @@ class FlashcardRequest(StrictRequest):
     tag: str | None = Field(default=None, min_length=1, max_length=32)
 
 
+class _UploadBodyTooLarge(Exception):
+    pass
+
+
+def _upload_limit_detail() -> str:
+    return f"ZIP exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit."
+
+
+class UploadBodyLimitMiddleware:
+    """Bound the raw multipart request before Starlette parses or spools it."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/upload_zip"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        limit = MAX_UPLOAD_BYTES + MAX_UPLOAD_REQUEST_OVERHEAD_BYTES
+        for name, value in scope.get("headers", []):
+            if name.lower() != b"content-length":
+                continue
+            try:
+                declared_length = int(value)
+            except ValueError:
+                break
+            if declared_length > limit:
+                response = JSONResponse(status_code=413, content={"detail": _upload_limit_detail()})
+                await response(scope, receive, send)
+                return
+
+        received = 0
+        response_started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _UploadBodyTooLarge
+            return message
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except _UploadBodyTooLarge:
+            if response_started:
+                raise
+            response = JSONResponse(status_code=413, content={"detail": _upload_limit_detail()})
+            await response(scope, receive, send)
+
+
 app = FastAPI(
     title="OT AI Study Engine",
     version=APP_VERSION,
@@ -177,6 +244,8 @@ if allowed_origins:
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
+
+app.add_middleware(UploadBodyLimitMiddleware)
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
@@ -448,7 +517,7 @@ async def read_upload_limited(file: UploadFile) -> bytes:
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail=f"ZIP exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
+                detail=_upload_limit_detail(),
             )
     return bytes(content)
 

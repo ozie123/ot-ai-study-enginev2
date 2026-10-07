@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 7 October 2026 — pre-parser upload body limit
+
+The upload endpoint now rejects a declared oversized multipart request before
+FastAPI parses it and counts streamed request chunks when `Content-Length` is
+absent. The raw-body ceiling is the ZIP limit plus a configurable 64 KiB
+multipart-envelope allowance, while the existing ZIP-byte check remains the
+authoritative file limit. Regression coverage proves both preflight rejection
+and early termination of an oversized chunked body.
+
+This bounds application-level multipart parsing and temporary spooling. It does
+not replace an edge/proxy request-size limit: request bytes still reach the HTTP
+server, and infrastructure should enforce a matching cap before application
+workers for stronger flood and bandwidth protection.
+
 ## 6 October 2026 — verified, exclusive backup publication
 
 Recovered October 5 checkout retained: the earlier fifteen changes are preserved

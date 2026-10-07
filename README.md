@@ -145,6 +145,7 @@ encrypted and access-controlled outside the application.
 | `CORS_ORIGINS` | No | empty | Non-credentialed public reads only; study sessions are same-origin |
 | `OT_DATA_DIR` | No | `backend/users` | Runtime storage root |
 | `MAX_UPLOAD_BYTES` | No | `26214400` | Maximum ZIP request size |
+| `MAX_UPLOAD_REQUEST_OVERHEAD_BYTES` | No | `65536` | Multipart envelope allowance above the ZIP limit |
 | `MAX_ZIP_MEMBERS` | No | `50` | Maximum files in one ZIP |
 | `MAX_PDF_BYTES` | No | `12582912` | Maximum expanded size per PDF |
 | `MAX_TOTAL_UNCOMPRESSED_BYTES` | No | `52428800` | Maximum expanded PDFs per ZIP |
