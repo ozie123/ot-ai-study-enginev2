@@ -7,6 +7,8 @@ encrypted and access-controlled outside this application.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -14,6 +16,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
 import tempfile
 import unicodedata
 import zipfile
@@ -421,6 +424,47 @@ def verify_backup(
         return _extract_verified(backup, Path(temporary), max_uncompressed_bytes)
 
 
+def _publish_directory_exclusive(staging: Path, destination: Path) -> None:
+    """Atomically publish a directory without replacing a concurrent destination."""
+    if os.name == "nt":
+        # Windows rename is already no-replace when the destination exists.
+        os.rename(staging, destination)
+        return
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(staging)
+    target = os.fsencode(destination)
+    if sys.platform.startswith("linux"):
+        try:
+            rename_no_replace = libc.renameat2
+        except AttributeError as error:
+            raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable") from error
+        rename_no_replace.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        result = rename_no_replace(-100, source, -100, target, 1)
+    elif sys.platform == "darwin":
+        try:
+            rename_no_replace = libc.renamex_np
+        except AttributeError as error:
+            raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable") from error
+        rename_no_replace.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = rename_no_replace(source, target, 4)
+    else:
+        raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable")
+
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(error_number, "Restore destination already exists", destination)
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
 def restore_backup(
     backup: Path,
     destination: Path,
@@ -439,7 +483,7 @@ def restore_backup(
         staging.mkdir(mode=0o700)
         manifest = _extract_verified(backup, staging, max_uncompressed_bytes)
         os.chmod(staging / DATABASE_NAME, 0o600)
-        os.replace(staging, destination)
+        _publish_directory_exclusive(staging, destination)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

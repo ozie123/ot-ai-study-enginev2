@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 8 October 2026 — exclusive restore publication
+
+Restore now publishes its fully verified private staging directory with an
+atomic no-replace rename. A destination created by another process after the
+initial check is preserved, the restore fails, and its staging directory is
+removed. Linux uses `renameat2(RENAME_NOREPLACE)`, macOS uses
+`renamex_np(RENAME_EXCL)`, and Windows' exclusive rename behavior is retained.
+Platforms without a supported atomic primitive fail closed.
+
+Regression coverage creates a competing empty destination at the publication
+boundary and verifies that it is neither overwritten nor removed. This closes
+the restore-directory race but does not add power-loss durability, directory
+fsync, archive encryption, or off-host retention.
+
 ## 7 October 2026 — pre-parser upload body limit
 
 The upload endpoint now rejects a declared oversized multipart request before

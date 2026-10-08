@@ -183,6 +183,26 @@ def test_backup_refuses_overwrite_nested_output_and_existing_restore(tmp_path):
         backups.restore_backup(backup, destination)
 
 
+def test_restore_preserves_destination_created_during_publication(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "valid.otai"
+    backups.create_backup(source, backup)
+    destination = tmp_path / "destination"
+    publish = backups._publish_directory_exclusive
+
+    def competing_publish(staging, target):
+        target.mkdir()
+        publish(staging, target)
+
+    monkeypatch.setattr(backups, "_publish_directory_exclusive", competing_publish)
+    with pytest.raises(FileExistsError, match="already exists"):
+        backups.restore_backup(backup, destination)
+
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
+    assert not list(tmp_path.glob(".destination.restore-*"))
+
+
 def test_backup_rejects_session_owner_missing_from_archive(tmp_path):
     source, _ = populated(tmp_path / "live")
     with sqlite3.connect(source / "sessions.sqlite3") as connection:
