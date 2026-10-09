@@ -58,6 +58,39 @@ class BackupManifest(TypedDict):
 SessionRecord = tuple[str, str, int]
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush one completed regular file before it can be published."""
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Flush directory metadata where the platform exposes that primitive."""
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_tree(root: Path) -> None:
+    """Flush restored files and directories from leaves to the staging root."""
+    paths = list(root.rglob("*"))
+    for path in paths:
+        if path.is_file():
+            _fsync_file(path)
+    directories = [path for path in paths if path.is_dir()]
+    directories.sort(key=lambda path: len(path.parts), reverse=True)
+    for path in directories:
+        _fsync_directory(path)
+    _fsync_directory(root)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -268,10 +301,12 @@ def create_backup(
                 archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, sort_keys=True))
                 for item in files:
                     archive.write(staging / str(item["path"]), str(item["path"]))
+            _fsync_file(temporary_output)
             verify_backup(temporary_output, max_uncompressed_bytes)
             # Both paths share a filesystem. Linking publishes atomically and
             # fails if another writer has claimed the destination meanwhile.
             os.link(temporary_output, output)
+            _fsync_directory(output.parent)
         return manifest
     finally:
         temporary_output.unlink(missing_ok=True)
@@ -483,7 +518,9 @@ def restore_backup(
         staging.mkdir(mode=0o700)
         manifest = _extract_verified(backup, staging, max_uncompressed_bytes)
         os.chmod(staging / DATABASE_NAME, 0o600)
+        _fsync_tree(staging)
         _publish_directory_exclusive(staging, destination)
+        _fsync_directory(destination.parent)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

@@ -96,6 +96,61 @@ def test_create_failed_verification_never_publishes_or_removes_other_output(tmp_
     assert not list(tmp_path.glob(".backup.otai.*.tmp"))
 
 
+def test_backup_flushes_archive_before_publication_and_parent_after(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+    real_file_sync = backups._fsync_file
+    real_directory_sync = backups._fsync_directory
+    events = []
+
+    def tracked_file_sync(path):
+        assert path.name.startswith(".backup.otai.")
+        assert not output.exists()
+        events.append("archive")
+        real_file_sync(path)
+
+    def tracked_directory_sync(path):
+        assert output.exists()
+        events.append("parent")
+        real_directory_sync(path)
+
+    monkeypatch.setattr(backups, "_fsync_file", tracked_file_sync)
+    monkeypatch.setattr(backups, "_fsync_directory", tracked_directory_sync)
+    backups.create_backup(source, output)
+
+    assert events == ["archive", "parent"]
+
+
+def test_backup_sync_failure_before_publication_leaves_no_output(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+
+    def failing_sync(path):
+        raise OSError("simulated archive sync failure")
+
+    monkeypatch.setattr(backups, "_fsync_file", failing_sync)
+    with pytest.raises(OSError, match="archive sync failure"):
+        backups.create_backup(source, output)
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".backup.otai.*.tmp"))
+
+
+def test_backup_parent_sync_failure_preserves_published_output(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+
+    def failing_sync(path):
+        raise OSError("simulated parent sync failure")
+
+    monkeypatch.setattr(backups, "_fsync_directory", failing_sync)
+    with pytest.raises(OSError, match="parent sync failure"):
+        backups.create_backup(source, output)
+
+    assert backups.verify_backup(output)["format"] == backups.FORMAT_VERSION
+    assert not list(tmp_path.glob(".backup.otai.*.tmp"))
+
+
 def test_cli_restore_retains_api_access_and_isolates_later_deletion(tmp_path, monkeypatch):
     source, token = populated(tmp_path / "source")
     backup = tmp_path / "backup.otai"
@@ -200,6 +255,55 @@ def test_restore_preserves_destination_created_during_publication(tmp_path, monk
 
     assert destination.is_dir()
     assert list(destination.iterdir()) == []
+    assert not list(tmp_path.glob(".destination.restore-*"))
+
+
+def test_restore_flushes_staging_tree_before_publication(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "valid.otai"
+    backups.create_backup(source, backup)
+    destination = tmp_path / "destination"
+    real_tree_sync = backups._fsync_tree
+    real_directory_sync = backups._fsync_directory
+    events = []
+
+    def tracked_tree_sync(path):
+        assert path.name.startswith(".destination.restore-")
+        assert not destination.exists()
+        events.append("tree")
+        real_tree_sync(path)
+
+    def tracked_directory_sync(path):
+        if path == destination.parent:
+            assert destination.exists()
+            events.append("parent")
+        real_directory_sync(path)
+
+    monkeypatch.setattr(backups, "_fsync_tree", tracked_tree_sync)
+    monkeypatch.setattr(backups, "_fsync_directory", tracked_directory_sync)
+    backups.restore_backup(backup, destination)
+
+    assert events == ["tree", "parent"]
+
+
+def test_restore_parent_sync_failure_preserves_published_destination(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "valid.otai"
+    backups.create_backup(source, backup)
+    destination = tmp_path / "destination"
+    real_directory_sync = backups._fsync_directory
+
+    def failing_sync(path):
+        if path == destination.parent:
+            raise OSError("simulated parent sync failure")
+        real_directory_sync(path)
+
+    monkeypatch.setattr(backups, "_fsync_directory", failing_sync)
+    with pytest.raises(OSError, match="parent sync failure"):
+        backups.restore_backup(backup, destination)
+
+    assert destination.is_dir()
+    assert (destination / backups.DATABASE_NAME).is_file()
     assert not list(tmp_path.glob(".destination.restore-*"))
 
 

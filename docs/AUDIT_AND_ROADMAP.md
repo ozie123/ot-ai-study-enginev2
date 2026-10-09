@@ -1,5 +1,22 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 9 October 2026 — crash-durable backup and restore publication
+
+Backup creation now flushes the completed private archive before verification
+and exclusive publication, then flushes the destination directory metadata.
+Restore flushes every verified staged file and directory from the leaves upward
+before its atomic no-replace rename, then flushes the destination parent. A
+pre-publication flush failure removes private staging and publishes nothing. If
+the final parent-directory flush fails after publication, the completed output
+is preserved and the command reports failure because durability is uncertain.
+
+Regression coverage verifies the flush order, pre-publication cleanup, and
+post-publication preservation behavior. POSIX filesystems must support file and
+directory `fsync`; Windows flushes regular files but does not expose directory
+handles through this implementation. This improves local crash recovery but is
+not a substitute for encrypted off-host retention, a simultaneous multi-file
+snapshot, or target-infrastructure restore drills.
+
 ## 8 October 2026 — exclusive restore publication
 
 Restore now publishes its fully verified private staging directory with an
@@ -11,8 +28,8 @@ Platforms without a supported atomic primitive fail closed.
 
 Regression coverage creates a competing empty destination at the publication
 boundary and verifies that it is neither overwritten nor removed. This closes
-the restore-directory race but does not add power-loss durability, directory
-fsync, archive encryption, or off-host retention.
+the restore-directory race but does not add archive encryption or off-host
+retention. The later 9 October checkpoint adds local publication flushing.
 
 ## 7 October 2026 — pre-parser upload body limit
 

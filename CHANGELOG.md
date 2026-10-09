@@ -23,6 +23,9 @@
 
 ## Portable backup and recovery — Unreleased
 
+- Flush completed backup archives before exclusive publication and flush
+  verified restore trees before atomic publication, including parent-directory
+  metadata on POSIX filesystems.
 - Add a provider-neutral command that creates a complete data-directory archive
   using SQLite's backup API and per-owner storage locks.
 - Verify and stream-extract restore data from one open archive, eliminating a

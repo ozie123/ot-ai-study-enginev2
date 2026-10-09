@@ -259,7 +259,8 @@ The repository includes a provider-neutral backup command for the complete
 `OT_DATA_DIR`. The archive contains PDF contents and hashed session credentials,
 so store it encrypted with access controls and a retention/deletion policy. The
 creator takes each owner's storage lock, uses SQLite's backup API, writes a
-SHA-256 manifest, and verifies the completed archive before reporting success.
+SHA-256 manifest, flushes and verifies the completed archive before exclusive
+publication, and flushes publication metadata on supported POSIX filesystems.
 
 ```bash
 python -m backend.backups create --data-dir backend/users --output /secure/ot-ai-backup.otai
@@ -270,7 +271,11 @@ python -m backend.backups restore --backup /secure/ot-ai-backup.otai --destinati
 Restore deliberately accepts only a destination that does not exist; it never
 merges with or overwrites live data. Verification and extraction happen in one
 streaming pass from the same open archive, and case-insensitive path collisions
-are rejected for Windows portability. On POSIX systems, created archives and
+are rejected for Windows portability. Verified restore files and directories
+are flushed before atomic publication on POSIX; Windows flushes regular files
+but does not provide directory flushing through this tool. A final metadata
+flush failure reports an error without deleting an already-published complete
+output. On POSIX systems, created archives and
 restored files use mode `0600`, while restored data roots use `0700`; retain
 equivalent owner-only access controls on other platforms. Test restoration to a
 separate path, start the application with `OT_DATA_DIR` pointing there, and
