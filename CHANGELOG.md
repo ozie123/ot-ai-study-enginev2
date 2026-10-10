@@ -46,6 +46,9 @@
 
 ## Abuse and cumulative resource limits — Unreleased
 
+- Use securely randomized private staging paths for backup creation and restore,
+  preventing stale or pre-created process-ID paths from blocking recovery.
+
 - Persist atomic fixed-window budgets for new sessions, per-owner AI attempts, and service-wide AI attempts in the session SQLite database.
 - Return HTTP 429 with `Retry-After` before paid provider work; fail closed when usage accounting is unavailable.
 - Cap distinct active/pending PDF names and total retained indexed chunks per session, in addition to existing byte and per-ingestion limits.

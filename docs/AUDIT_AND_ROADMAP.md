@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 10 October 2026 — private randomized recovery staging
+
+Backup and restore operations now allocate unpredictable owner-private staging
+paths in the destination filesystem instead of deriving them from the process
+ID. A stale or deliberately pre-created PID-named file or directory therefore
+cannot block later recovery work, and existing paths are never removed while a
+new operation cleans up only the unique staging path it created.
+
+Regression coverage preserves stale legacy staging paths while independently
+creating and restoring a verified backup. Random staging prevents predictable
+name collisions and local denial of service; it does not protect against a
+privileged process, provide archive encryption, or replace off-host retention.
+
 ## 9 October 2026 — crash-durable backup and restore publication
 
 Backup creation now flushes the completed private archive before verification

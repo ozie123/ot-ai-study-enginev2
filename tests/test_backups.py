@@ -96,6 +96,19 @@ def test_create_failed_verification_never_publishes_or_removes_other_output(tmp_
     assert not list(tmp_path.glob(".backup.otai.*.tmp"))
 
 
+def test_backup_ignores_and_preserves_stale_pid_staging_file(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    output = tmp_path / "backup.otai"
+    stale = tmp_path / f".backup.otai.{os.getpid()}.tmp"
+    stale.write_bytes(b"stale private staging file")
+
+    backups.create_backup(source, output)
+
+    assert backups.verify_backup(output)["format"] == backups.FORMAT_VERSION
+    assert stale.read_bytes() == b"stale private staging file"
+    assert list(tmp_path.glob(".backup.otai.*.tmp")) == [stale]
+
+
 def test_backup_flushes_archive_before_publication_and_parent_after(tmp_path, monkeypatch):
     source, _ = populated(tmp_path / "live")
     output = tmp_path / "backup.otai"
@@ -256,6 +269,23 @@ def test_restore_preserves_destination_created_during_publication(tmp_path, monk
     assert destination.is_dir()
     assert list(destination.iterdir()) == []
     assert not list(tmp_path.glob(".destination.restore-*"))
+
+
+def test_restore_ignores_and_preserves_stale_pid_staging_directory(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "valid.otai"
+    backups.create_backup(source, backup)
+    destination = tmp_path / "destination"
+    stale = tmp_path / f".destination.restore-{os.getpid()}"
+    stale.mkdir()
+    marker = stale / "keep.txt"
+    marker.write_text("stale private staging directory")
+
+    backups.restore_backup(backup, destination)
+
+    assert (destination / backups.DATABASE_NAME).is_file()
+    assert marker.read_text() == "stale private staging directory"
+    assert list(tmp_path.glob(".destination.restore-*")) == [stale]
 
 
 def test_restore_flushes_staging_tree_before_publication(tmp_path, monkeypatch):

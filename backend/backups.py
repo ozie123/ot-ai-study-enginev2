@@ -253,9 +253,10 @@ def create_backup(
         raise ValueError("Backup output must be outside the data directory")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary_output = output.with_name(f".{output.name}.{os.getpid()}.tmp")
-    if temporary_output.exists():
-        raise FileExistsError(f"Temporary backup already exists: {temporary_output}")
+    temporary_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+    )
+    temporary_output = Path(temporary_name)
     try:
         with tempfile.TemporaryDirectory(prefix="ot-ai-backup-") as temporary:
             staging = Path(temporary)
@@ -289,9 +290,8 @@ def create_backup(
                 "owners": owners,
                 "files": files,
             }
-            descriptor = os.open(
-                temporary_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-            )
+            descriptor = temporary_descriptor
+            temporary_descriptor = -1
             with (
                 os.fdopen(descriptor, "w+b") as output_file,
                 zipfile.ZipFile(
@@ -309,6 +309,8 @@ def create_backup(
             _fsync_directory(output.parent)
         return manifest
     finally:
+        if temporary_descriptor >= 0:
+            os.close(temporary_descriptor)
         temporary_output.unlink(missing_ok=True)
 
 
@@ -511,11 +513,11 @@ def restore_backup(
         raise FileExistsError("Restore destination already exists")
     backup = backup.resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = destination.with_name(f".{destination.name}.restore-{os.getpid()}")
-    if staging.exists():
-        raise FileExistsError(f"Restore staging path already exists: {staging}")
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=destination.parent)
+    )
     try:
-        staging.mkdir(mode=0o700)
+        os.chmod(staging, 0o700)
         manifest = _extract_verified(backup, staging, max_uncompressed_bytes)
         os.chmod(staging / DATABASE_NAME, 0o600)
         _fsync_tree(staging)
