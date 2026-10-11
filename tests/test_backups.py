@@ -654,6 +654,44 @@ def test_restore_verifies_and_streams_from_one_open_archive(tmp_path, monkeypatc
     assert (restored / "sessions.sqlite3").is_file()
 
 
+def test_verify_rejects_archive_replacement_during_open(tmp_path, monkeypatch):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+    replacement = tmp_path / "replacement.otai"
+    replacement.write_bytes(backup.read_bytes())
+    real_open = backups.os.open
+    replaced = False
+
+    def replacing_open(path, flags, mode=0o777, **kwargs):
+        nonlocal replaced
+        if not replaced and Path(path) == backup and flags & os.O_ACCMODE == os.O_RDONLY:
+            replaced = True
+            os.replace(replacement, backup)
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(backups.os, "open", replacing_open)
+    with pytest.raises(ValueError, match="unsafe backup archive"):
+        backups.verify_backup(backup)
+    assert replaced is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation requires Windows privileges")
+def test_verify_and_restore_reject_symlinked_archive(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    backup = tmp_path / "backup.otai"
+    backups.create_backup(source, backup)
+    link = tmp_path / "backup-link.otai"
+    link.symlink_to(backup)
+
+    with pytest.raises(ValueError, match="unsafe backup archive"):
+        backups.verify_backup(link)
+    destination = tmp_path / "restored"
+    with pytest.raises(ValueError, match="unsafe backup archive"):
+        backups.restore_backup(link, destination)
+    assert not destination.exists()
+
+
 def test_verify_and_restore_enforce_uncompressed_size_limit(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"

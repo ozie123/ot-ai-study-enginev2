@@ -272,8 +272,9 @@ python -m backend.backups restore --backup /secure/ot-ai-backup.otai --destinati
 
 Restore deliberately accepts only a destination that does not exist; it never
 merges with or overwrites live data. Verification and extraction happen in one
-streaming pass from the same open archive, and case-insensitive path collisions
-are rejected for Windows portability. Verified restore files and directories
+streaming pass from the same descriptor-pinned regular archive; symlinked or
+replaced archive paths are rejected. Case-insensitive path collisions are
+rejected for Windows portability. Verified restore files and directories
 are flushed before atomic publication on POSIX; Windows flushes regular files
 but does not provide directory flushing through this tool. A final metadata
 flush failure reports an error without deleting an already-published complete

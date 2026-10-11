@@ -46,6 +46,8 @@
 
 ## Abuse and cumulative resource limits — Unreleased
 
+- Pin recovery archives to verified regular-file descriptors and reject
+  symlink or path-replacement substitution before verification and restore.
 - Use securely randomized private staging paths for backup creation and restore,
   preventing stale or pre-created process-ID paths from blocking recovery.
 

@@ -20,6 +20,8 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict, cast
@@ -403,8 +405,37 @@ def _validate_staged_data(staging: Path, manifest: BackupManifest) -> None:
                 raise ValueError(f"Study data is invalid for owner {owner}") from error
 
 
-def _open_backup(path: Path) -> zipfile.ZipFile:
-    return zipfile.ZipFile(path)
+@contextmanager
+def _open_backup(path: Path) -> Iterator[zipfile.ZipFile]:
+    """Pin one regular archive by descriptor and reject path substitution."""
+    unsafe_message = "Missing or unsafe backup archive"
+    try:
+        inspected = path.lstat()
+        if not stat.S_ISREG(inspected.st_mode):
+            raise ValueError(unsafe_message)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except (FileNotFoundError, OSError) as error:
+        raise ValueError(unsafe_message) from error
+
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (inspected.st_dev, inspected.st_ino)
+        ):
+            raise ValueError(unsafe_message)
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = -1
+            with zipfile.ZipFile(source) as archive:
+                yield archive
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _extract_verified(
@@ -456,7 +487,7 @@ def verify_backup(
     max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES,
 ) -> BackupManifest:
     """Validate paths, hashes, SQLite contents, and every stored study index."""
-    backup = backup.resolve()
+    backup = Path(os.path.abspath(backup))
     with tempfile.TemporaryDirectory(prefix="ot-ai-verify-") as temporary:
         return _extract_verified(backup, Path(temporary), max_uncompressed_bytes)
 
@@ -511,7 +542,7 @@ def restore_backup(
     destination = destination.resolve()
     if destination.exists():
         raise FileExistsError("Restore destination already exists")
-    backup = backup.resolve()
+    backup = Path(os.path.abspath(backup))
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=destination.parent)

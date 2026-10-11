@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 11 October 2026 — descriptor-pinned recovery archives
+
+Backup verification and restore now reject symlinked or non-regular archive
+paths and pin the inspected file by descriptor before parsing it. Replacement
+between path inspection and open is detected by device/inode identity, while a
+replacement after open cannot change the bytes streamed through that descriptor.
+
+Regression coverage rejects both deterministic path replacement and symlinked
+archives without publishing a restore destination. This protects the local
+recovery boundary from cooperating unprivileged processes; it does not defend
+against privileged storage tampering, encrypt archives, or authenticate their
+origin.
+
 ## 10 October 2026 — private randomized recovery staging
 
 Backup and restore operations now allocate unpredictable owner-private staging
