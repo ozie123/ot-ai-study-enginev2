@@ -1,5 +1,7 @@
 """Per-owner OS locks; released automatically if a worker exits."""
 
+import os
+import stat
 import sys
 import time
 from collections.abc import Iterator
@@ -7,9 +9,34 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+def _open_lock_file(path: Path):
+    """Open one private regular lock file without following a substituted path."""
+    flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("Unsafe study storage lock")
+        if os.name != "nt":
+            os.fchmod(descriptor, 0o600)
+        handle = os.fdopen(descriptor, "a+b")
+        descriptor = -1
+        return handle
+    except OSError as error:
+        raise ValueError("Unsafe study storage lock") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 @contextmanager
 def storage_lock(path: Path) -> Iterator[None]:
-    with path.open("a+b") as handle:
+    with _open_lock_file(path) as handle:
         if sys.platform == "win32":
             import msvcrt
 

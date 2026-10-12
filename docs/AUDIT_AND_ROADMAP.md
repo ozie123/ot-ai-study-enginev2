@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 12 October 2026 — pinned private storage locks
+
+Per-owner mutation and backup locks now open an owner-private regular file by
+descriptor without following symlinks. Existing lock files are restricted to
+mode `0600` on POSIX, while symlinks and special files fail closed before the
+application locks, mutates, or backs up owner study data.
+
+Regression coverage verifies normal lock creation and rejects both a symlinked
+lock without modifying its target and a FIFO without blocking. This protects
+the local unprivileged-process boundary; it does not prevent a privileged
+process from replacing directories, provide distributed locks, or coordinate
+multiple hosts.
+
 ## 11 October 2026 — descriptor-pinned recovery archives
 
 Backup verification and restore now reject symlinked or non-regular archive
