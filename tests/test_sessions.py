@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import os
 import sqlite3
+import stat
 import zipfile
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backend import server, sessions
@@ -66,6 +69,52 @@ def test_cookie_flags_idempotence_and_persistent_hashed_record(client):
             hashes = [r[0] for r in db.execute("SELECT token_hash FROM sessions")]
         assert token not in hashes
         assert sessions.token_hash(token) in hashes
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit regression")
+def test_live_private_storage_restricts_existing_permissions(client):
+    owner = identity(client)
+    paths = server.user_paths(owner)
+    database = server.USERS_DIR / "sessions.sqlite3"
+    for directory in [server.USERS_DIR, paths["user_dir"], paths["data_dir"], paths["uploads_dir"]]:
+        directory.chmod(0o777)
+    database.chmod(0o666)
+
+    assert sessions.lookup(server.USERS_DIR, client.cookies.get(server.SESSION_COOKIE_NAME))
+    paths = server.user_paths(owner)
+
+    assert stat.S_IMODE(server.USERS_DIR.stat().st_mode) == 0o700
+    assert stat.S_IMODE(database.stat().st_mode) == 0o600
+    for name in ["user_dir", "data_dir", "uploads_dir"]:
+        assert stat.S_IMODE(paths[name].stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink regression")
+def test_session_database_rejects_symlink(tmp_path):
+    root = tmp_path / "users"
+    root.mkdir()
+    target = tmp_path / "outside.sqlite3"
+    target.write_bytes(b"outside")
+    (root / "sessions.sqlite3").symlink_to(target)
+
+    with pytest.raises(ValueError, match="Unsafe private storage file"):
+        sessions.create(root)
+    assert target.read_bytes() == b"outside"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink regression")
+def test_user_storage_rejects_symlinked_owner_directory(tmp_path, monkeypatch):
+    root = tmp_path / "users"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "s_owner").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(server, "USERS_DIR", root)
+
+    with pytest.raises(HTTPException) as caught:
+        server.user_paths("s_owner")
+    assert caught.value.status_code == 400
+    assert list(outside.iterdir()) == []
 
 
 @pytest.mark.parametrize("token", ["../../outside", "A" * 43, "", "a" * 500])

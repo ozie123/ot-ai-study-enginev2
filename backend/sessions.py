@@ -13,6 +13,14 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request
 
+try:
+    from .private_storage import ensure_private_directory, open_private_regular_file
+except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
+    from private_storage import (  # type: ignore[no-redef]
+        ensure_private_directory,
+        open_private_regular_file,
+    )
+
 SESSION_SECONDS = 30 * 24 * 60 * 60
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
@@ -31,10 +39,10 @@ def require_same_origin_write(request: Request) -> None:
 
 @contextmanager
 def database(root: Path):
-    root.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(root)
     path = root / "sessions.sqlite3"
-    # Request restrictive permissions at creation; never truncate an existing DB.
-    descriptor = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
+    # Restrict existing databases too; never truncate one while preparing it.
+    descriptor = open_private_regular_file(path, os.O_CREAT | os.O_WRONLY)
     os.close(descriptor)
     connection = sqlite3.connect(path, timeout=10)
     try:

@@ -23,6 +23,8 @@
 
 ## Portable backup and recovery — Unreleased
 
+- Restrict live POSIX session and per-owner study storage to owner-only modes,
+  and reject symlinked session databases or owner directories before use.
 - Flush completed backup archives before exclusive publication and flush
   verified restore trees before atomic publication, including parent-directory
   metadata on POSIX filesystems.

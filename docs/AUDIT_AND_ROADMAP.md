@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 13 October 2026 — private live storage permissions
+
+Live POSIX storage now restricts the application data root and every session's
+owner, data, and upload directories to mode `0700`. The session SQLite database
+is opened as a pinned regular file without following symlinks and is restricted
+to mode `0600`, including when a deployment starts with permissive existing
+modes. Symlinked owner directories and session databases fail closed before the
+application reads or mutates private state.
+
+Regression coverage resets live paths to permissive modes and verifies they are
+corrected, then rejects symlink substitution without changing the external
+target. These local controls protect cooperating unprivileged-process boundaries;
+they do not encrypt data, defend against privileged storage replacement, or set
+equivalent Windows ACLs.
+
 ## 12 October 2026 — pinned private storage locks
 
 Per-owner mutation and backup locks now open an owner-private regular file by

@@ -34,6 +34,7 @@ try:
         resolve_api_key,
     )
     from .core import NoteStore, chunk_text, infer_tag_from_filename, read_pdf_pages
+    from .private_storage import ensure_private_directory
     from .storage_lock import storage_lock
 except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
     import sessions  # type: ignore[no-redef]
@@ -53,6 +54,7 @@ except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
         infer_tag_from_filename,
         read_pdf_pages,
     )
+    from private_storage import ensure_private_directory  # type: ignore[no-redef]
     from storage_lock import storage_lock  # type: ignore[no-redef]
 
 
@@ -401,18 +403,24 @@ def validate_tag(tag: str | None) -> str | None:
 
 
 def user_paths(user_id: str) -> dict[str, Path]:
-    USERS_DIR.mkdir(parents=True, exist_ok=True)
-    users_root = USERS_DIR.resolve()
-    user_dir = (users_root / user_id).resolve()
     try:
+        ensure_private_directory(USERS_DIR)
+        users_root = USERS_DIR.resolve(strict=True)
+        user_candidate = users_root / user_id
+        user_candidate.relative_to(users_root)
+        ensure_private_directory(user_candidate)
+        user_dir = user_candidate.resolve(strict=True)
         user_dir.relative_to(users_root)
-    except ValueError as error:
+    except (OSError, ValueError) as error:
         raise HTTPException(status_code=400, detail="Invalid user storage path.") from error
 
     data_dir = user_dir / "data"
     uploads_dir = user_dir / "uploads"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    uploads_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_private_directory(data_dir)
+        ensure_private_directory(uploads_dir)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Study storage preparation failed.") from error
     return {
         "user_dir": user_dir,
         "data_dir": data_dir,
@@ -609,7 +617,10 @@ def health():
 def readiness():
     if not (FRONTEND_DIR / "index.html").is_file():
         return JSONResponse(status_code=503, content={"ready": False})
-    USERS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_private_directory(USERS_DIR)
+    except (OSError, ValueError):
+        return JSONResponse(status_code=503, content={"ready": False})
     if not os.access(USERS_DIR, os.W_OK):
         return JSONResponse(status_code=503, content={"ready": False})
     return {"ready": True}
