@@ -98,6 +98,17 @@ def safe_remove(path: str):
         pass
 
 
+def _fsync_directory(path: Path) -> None:
+    """Flush directory metadata where the platform exposes that primitive."""
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def get_openai_client(api_key: str | None = None) -> OpenAI:
     """
     Server mode: pass api_key from header.
@@ -286,7 +297,8 @@ class NoteStore:
             payload["documents"] = list(self.documents)
             payload["pending"] = list(self.pending)
         # A single replacement publishes vectors and metadata together. Never
-        # overwrite the active snapshot until both have been flushed to disk.
+        # overwrite the active snapshot until both have been flushed to disk,
+        # then flush the directory entry so publication survives power loss.
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -306,6 +318,7 @@ class NoteStore:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temporary, self.snapshot_path)
+            _fsync_directory(self.base_path)
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

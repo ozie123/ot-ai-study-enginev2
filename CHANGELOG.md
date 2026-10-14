@@ -64,6 +64,9 @@
 
 ## Transactional PDF replacement and deletion — Unreleased
 
+- Flush the study snapshot's containing directory after atomic replacement on
+  POSIX, preserving a completed publication while reporting uncertain
+  durability if the final directory flush fails.
 - Include active and pending PDF bytes in the atomic index snapshot. Stage uploads until the entire ingestion batch succeeds; retain working files and vectors on parse, embedding, or save failures.
 - Replace all chunks for a canonical filename without rebuilding unrelated embeddings. Persist deletion of the last document as an empty snapshot.
 - Add session-scoped `DELETE /documents/{filename}` and library controls with pending replacement status.

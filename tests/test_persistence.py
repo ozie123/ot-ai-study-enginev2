@@ -37,6 +37,42 @@ def test_snapshot_roundtrip_and_search(tmp_path, monkeypatch):
     assert loaded.search("question", tag="week1")[0][2:] == ("original", store.meta[0])
 
 
+def test_snapshot_flushes_parent_after_atomic_publication(tmp_path, monkeypatch):
+    events = []
+    replace = core.os.replace
+
+    def tracked_replace(source, destination):
+        replace(source, destination)
+        events.append("replace")
+
+    def tracked_directory_sync(path):
+        assert path == tmp_path
+        assert (path / "study.snapshot").is_file()
+        events.append("directory-fsync")
+
+    monkeypatch.setattr(core.os, "replace", tracked_replace)
+    monkeypatch.setattr(core, "_fsync_directory", tracked_directory_sync)
+    populated(tmp_path).save()
+    assert events == ["replace", "directory-fsync"]
+
+
+def test_directory_flush_failure_preserves_published_snapshot(tmp_path, monkeypatch):
+    store = populated(tmp_path)
+    store.save()
+    store.chunks = ["updated"]
+
+    def fail(_path):
+        raise OSError("injected directory flush failure")
+
+    monkeypatch.setattr(core, "_fsync_directory", fail)
+    with pytest.raises(OSError, match="directory flush failure"):
+        store.save()
+
+    loaded = NoteStore(tmp_path)
+    assert loaded.load() and loaded.chunks == ["updated"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["study.snapshot"]
+
+
 @pytest.mark.parametrize("failure", ["serialize", "metadata", "fsync", "replace"])
 def test_failed_save_preserves_previous_snapshot(tmp_path, monkeypatch, failure):
     store = populated(tmp_path)

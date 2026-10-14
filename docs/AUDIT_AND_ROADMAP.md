@@ -1,5 +1,21 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 14 October 2026 — crash-durable study snapshot publication
+
+Study snapshot saves now flush the containing directory after atomically
+replacing `study.snapshot`, so a successful POSIX save includes durable rename
+metadata rather than only durable file contents. A directory-flush failure after
+replacement preserves the complete published snapshot and reports failure
+because its power-loss durability is uncertain; temporary files are still
+cleaned.
+
+Regression coverage verifies replacement-before-directory-flush ordering and
+post-publication failure behavior. POSIX deployments require directory `fsync`
+support. Windows continues to flush the snapshot file but does not expose
+directory handles through this implementation. This does not provide a
+simultaneous snapshot across session SQLite and every owner directory or replace
+encrypted off-host retention and target-infrastructure restore drills.
+
 ## 13 October 2026 — private live storage permissions
 
 Live POSIX storage now restricts the application data root and every session's
