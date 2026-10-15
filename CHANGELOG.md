@@ -64,6 +64,8 @@
 
 ## Transactional PDF replacement and deletion — Unreleased
 
+- Pin study snapshot loads to an owner-private regular-file descriptor, rejecting
+  POSIX symlinks and path replacement during open before parsing persisted state.
 - Flush the study snapshot's containing directory after atomic replacement on
   POSIX, preserving a completed publication while reporting uncertain
   durability if the final directory flush fails.

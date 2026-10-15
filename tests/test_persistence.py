@@ -1,4 +1,5 @@
 import json
+import os
 import zipfile
 
 import faiss
@@ -71,6 +72,47 @@ def test_directory_flush_failure_preserves_published_snapshot(tmp_path, monkeypa
     loaded = NoteStore(tmp_path)
     assert loaded.load() and loaded.chunks == ["updated"]
     assert sorted(path.name for path in tmp_path.iterdir()) == ["study.snapshot"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Symlink creation requires Windows privileges")
+def test_load_rejects_symlinked_snapshot_without_touching_target(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    target = tmp_path / "real.snapshot"
+    store.snapshot_path.replace(target)
+    store.snapshot_path.symlink_to(target)
+
+    with pytest.raises(ValueError, match="Unsafe private storage file"):
+        NoteStore(tmp_path).load()
+
+    assert target.is_file()
+    assert store.snapshot_path.is_symlink()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="inode identity is POSIX-specific")
+def test_load_rejects_snapshot_replacement_during_open(tmp_path, monkeypatch):
+    store = populated(tmp_path)
+    store.save()
+    replacement = tmp_path / "replacement.snapshot"
+    replacement.write_bytes(store.snapshot_path.read_bytes())
+    real_open = core.os.open
+    replaced = False
+
+    def replacing_open(path, flags, mode=0o777, **kwargs):
+        nonlocal replaced
+        descriptor = real_open(path, flags, mode, **kwargs)
+        if not replaced and path == store.snapshot_path and flags & os.O_ACCMODE == os.O_RDONLY:
+            replaced = True
+            os.replace(replacement, store.snapshot_path)
+        return descriptor
+
+    monkeypatch.setattr(core.os, "open", replacing_open)
+    loaded = populated(tmp_path, text="in-memory")
+    with pytest.raises(ValueError, match="changed while opening"):
+        loaded.load()
+
+    assert replaced is True
+    assert loaded.chunks == ["in-memory"]
 
 
 @pytest.mark.parametrize("failure", ["serialize", "metadata", "fsync", "replace"])

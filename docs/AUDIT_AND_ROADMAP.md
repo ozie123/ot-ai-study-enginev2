@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 15 October 2026 — descriptor-pinned study snapshot loads
+
+Study snapshot loading now parses `study.snapshot` from one pinned private
+regular-file descriptor. On POSIX, the open does not follow symlinks, an inode
+identity check rejects path replacement during open, and the snapshot is
+restricted to mode `0600`. Replacement after open cannot redirect the bytes
+consumed by that load.
+
+Regression coverage rejects a symlinked snapshot without changing its target
+and deterministically replaces the path during open without mutating in-memory
+study state. These checks protect cooperating unprivileged-process boundaries;
+they do not defend against privileged directory replacement, add equivalent
+Windows ACL controls, or authenticate snapshot contents cryptographically.
+
 ## 14 October 2026 — crash-durable study snapshot publication
 
 Study snapshot saves now flush the containing directory after atomically

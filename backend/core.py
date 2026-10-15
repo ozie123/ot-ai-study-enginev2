@@ -16,8 +16,10 @@ from pypdf import PdfReader
 
 try:
     from .ai_service import EMBEDDING_MODEL, create_openai_client
+    from .private_storage import open_private_regular_file
 except ImportError:  # Supports the optional `python core.py` CLI workflow.
     from ai_service import EMBEDDING_MODEL, create_openai_client  # type: ignore[no-redef]
+    from private_storage import open_private_regular_file  # type: ignore[no-redef]
 
 # -----------------------
 # Setup
@@ -331,32 +333,42 @@ class NoteStore:
     def load(self) -> bool:
         documents = None
         pending = {}
-        if self.snapshot_path.exists():
-            with zipfile.ZipFile(self.snapshot_path) as archive:
-                index = faiss.deserialize_index(
-                    np.frombuffer(archive.read("index"), dtype="uint8").copy()
-                )
-                payload = json.loads(archive.read("metadata"))
-                if isinstance(payload, dict) and "documents" in payload:
-                    groups = []
-                    for group in ("documents", "pending"):
-                        names = payload.get(group)
-                        if (
-                            not isinstance(names, list)
-                            or not all(
-                                isinstance(name, str)
-                                and name.lower().endswith(".pdf")
-                                and "/" not in name
-                                and "\\" not in name
-                                for name in names
-                            )
-                            or len({name.casefold() for name in names}) != len(names)
-                        ):
-                            raise ValueError("Invalid document manifest")
-                        groups.append(
-                            {name: archive.read(f"{group}/{i}") for i, name in enumerate(names)}
+        if self.snapshot_path.exists() or self.snapshot_path.is_symlink():
+            descriptor = open_private_regular_file(self.snapshot_path, os.O_RDONLY)
+            try:
+                with os.fdopen(descriptor, "rb") as snapshot:
+                    descriptor = -1
+                    with zipfile.ZipFile(snapshot) as archive:
+                        index = faiss.deserialize_index(
+                            np.frombuffer(archive.read("index"), dtype="uint8").copy()
                         )
-                    documents, pending = groups
+                        payload = json.loads(archive.read("metadata"))
+                        if isinstance(payload, dict) and "documents" in payload:
+                            groups = []
+                            for group in ("documents", "pending"):
+                                names = payload.get(group)
+                                if (
+                                    not isinstance(names, list)
+                                    or not all(
+                                        isinstance(name, str)
+                                        and name.lower().endswith(".pdf")
+                                        and "/" not in name
+                                        and "\\" not in name
+                                        for name in names
+                                    )
+                                    or len({name.casefold() for name in names}) != len(names)
+                                ):
+                                    raise ValueError("Invalid document manifest")
+                                groups.append(
+                                    {
+                                        name: archive.read(f"{group}/{i}")
+                                        for i, name in enumerate(names)
+                                    }
+                                )
+                            documents, pending = groups
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
         elif self.faiss_path.exists() or self.chunks_path.exists():
             # Read-only legacy migration: the next save publishes a snapshot;
             # retain the old pair, but never fall back once a snapshot exists.
