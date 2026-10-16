@@ -64,6 +64,8 @@
 
 ## Transactional PDF replacement and deletion — Unreleased
 
+- Reject study snapshots with duplicate, missing, undeclared, or unexpected ZIP
+  members before accepting persisted vectors, metadata, or document bytes.
 - Pin study snapshot loads to an owner-private regular-file descriptor, rejecting
   POSIX symlinks and path replacement during open before parsing persisted state.
 - Flush the study snapshot's containing directory after atomic replacement on

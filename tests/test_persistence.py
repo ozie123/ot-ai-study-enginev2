@@ -115,6 +115,33 @@ def test_load_rejects_snapshot_replacement_during_open(tmp_path, monkeypatch):
     assert loaded.chunks == ["in-memory"]
 
 
+def test_load_rejects_unexpected_snapshot_member(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    with zipfile.ZipFile(store.snapshot_path, "a") as archive:
+        archive.writestr("unexpected", b"hidden data")
+
+    loaded = populated(tmp_path, text="in-memory")
+    with pytest.raises(ValueError, match="Invalid study snapshot archive"):
+        loaded.load()
+    assert loaded.chunks == ["in-memory"]
+
+
+def test_load_rejects_duplicate_snapshot_member(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    with (
+        zipfile.ZipFile(store.snapshot_path, "a") as archive,
+        pytest.warns(UserWarning, match="Duplicate name"),
+    ):
+        archive.writestr("metadata", b"{}")
+
+    loaded = populated(tmp_path, text="in-memory")
+    with pytest.raises(ValueError, match="Invalid study snapshot archive"):
+        loaded.load()
+    assert loaded.chunks == ["in-memory"]
+
+
 @pytest.mark.parametrize("failure", ["serialize", "metadata", "fsync", "replace"])
 def test_failed_save_preserves_previous_snapshot(tmp_path, monkeypatch, failure):
     store = populated(tmp_path)

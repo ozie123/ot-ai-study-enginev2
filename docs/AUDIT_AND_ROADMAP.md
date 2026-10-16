@@ -1,5 +1,17 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 16 October 2026 — strict study snapshot archive layout
+
+Study snapshot loading now rejects duplicate ZIP member names, missing required
+`index` or `metadata` members, and every member not declared by the validated
+document manifest. This removes ambiguous parser selection and prevents hidden
+or stale content from being accepted inside an otherwise readable snapshot.
+
+Regression coverage appends an unexpected member and a second `metadata`
+member, then verifies each load fails without mutating existing in-memory study
+state. This validates structure and declared contents; it does not authenticate
+snapshot origin, encrypt stored data, or bound whole-snapshot memory costs.
+
 ## 15 October 2026 — descriptor-pinned study snapshot loads
 
 Study snapshot loading now parses `study.snapshot` from one pinned private

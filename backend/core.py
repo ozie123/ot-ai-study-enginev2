@@ -339,10 +339,17 @@ class NoteStore:
                 with os.fdopen(descriptor, "rb") as snapshot:
                     descriptor = -1
                     with zipfile.ZipFile(snapshot) as archive:
+                        member_names = [member.filename for member in archive.infolist()]
+                        if (
+                            len(member_names) != len(set(member_names))
+                            or not {"index", "metadata"}.issubset(member_names)
+                        ):
+                            raise ValueError("Invalid study snapshot archive")
                         index = faiss.deserialize_index(
                             np.frombuffer(archive.read("index"), dtype="uint8").copy()
                         )
                         payload = json.loads(archive.read("metadata"))
+                        expected_members = {"index", "metadata"}
                         if isinstance(payload, dict) and "documents" in payload:
                             groups = []
                             for group in ("documents", "pending"):
@@ -359,6 +366,9 @@ class NoteStore:
                                     or len({name.casefold() for name in names}) != len(names)
                                 ):
                                     raise ValueError("Invalid document manifest")
+                                expected_members.update(
+                                    f"{group}/{i}" for i in range(len(names))
+                                )
                                 groups.append(
                                     {
                                         name: archive.read(f"{group}/{i}")
@@ -366,6 +376,8 @@ class NoteStore:
                                     }
                                 )
                             documents, pending = groups
+                        if set(member_names) != expected_members:
+                            raise ValueError("Invalid study snapshot archive")
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)
