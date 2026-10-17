@@ -142,6 +142,51 @@ def test_load_rejects_duplicate_snapshot_member(tmp_path):
     assert loaded.chunks == ["in-memory"]
 
 
+def test_load_rejects_snapshot_expansion_before_reading_members(tmp_path, monkeypatch):
+    snapshot = tmp_path / "study.snapshot"
+    with zipfile.ZipFile(snapshot, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("index", b"x" * 10_000)
+        archive.writestr("metadata", b"{}")
+    with zipfile.ZipFile(snapshot) as archive:
+        expanded = sum(member.file_size for member in archive.infolist())
+    stored = snapshot.stat().st_size
+    assert stored < expanded
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("snapshot members must not be read before expansion validation")
+
+    monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
+    with pytest.raises(ValueError, match="configured expansion limit"):
+        NoteStore(tmp_path, max_snapshot_bytes=(stored + expanded) // 2).load()
+
+
+def test_load_rejects_excess_snapshot_members_before_reading_them(tmp_path, monkeypatch):
+    populated(tmp_path).save()
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("snapshot members must not be read before count validation")
+
+    monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
+    with pytest.raises(ValueError, match="too many members"):
+        NoteStore(tmp_path, max_snapshot_members=1).load()
+
+
+def test_oversized_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.max_snapshot_bytes = len(original) + 100
+    store.chunks = ["updated" * 10_000]
+
+    with pytest.raises(ValueError, match="configured size limit"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+    loaded = NoteStore(tmp_path)
+    assert loaded.load() and loaded.chunks == ["original"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["study.snapshot"]
+
+
 @pytest.mark.parametrize("failure", ["serialize", "metadata", "fsync", "replace"])
 def test_failed_save_preserves_previous_snapshot(tmp_path, monkeypatch, failure):
     store = populated(tmp_path)

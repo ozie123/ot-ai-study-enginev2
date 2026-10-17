@@ -155,6 +155,8 @@ encrypted and access-controlled outside the application.
 | `MAX_PDF_TEXT_CHARS` | No | `2000000` | Maximum extracted characters per PDF |
 | `MAX_INGEST_CHUNKS` | No | `2500` | Maximum new chunks in one ingestion |
 | `MAX_INDEXED_CHUNKS_PER_SESSION` | No | `10000` | Maximum indexed chunks retained per session |
+| `MAX_SNAPSHOT_BYTES` | No | `536870912` | Maximum stored size and total expanded members in one study snapshot |
+| `MAX_SNAPSHOT_MEMBERS` | No | `1002` | Maximum ZIP members in one study snapshot |
 | `MAX_UPLOADS_PER_SESSION_HOUR` | No | `20` | ZIP upload attempts per session per UTC-aligned hour |
 | `MAX_UPLOADS_PER_HOUR` | No | `200` | ZIP upload attempts across the service per UTC-aligned hour |
 | `MAX_CONCURRENT_AI_REQUESTS_PER_SESSION` | No | `1` | Simultaneous embedding/retrieval/generation operations per session |
@@ -211,7 +213,7 @@ The snapshot is the sole active store; PDFs are ZIP entries inside it, not separ
 
 Active and pending PDF bytes both count toward `MAX_USER_STORAGE_BYTES`, so replacing a document requires room for its rollback copy. The union of active and pending canonical filenames counts toward `MAX_DOCUMENTS_PER_SESSION`; a same-name replacement does not consume another document slot. `MAX_INDEXED_CHUNKS_PER_SESSION` applies after removing the old chunks for every successful replacement. Existing libraries above a newly lowered count cap may make non-growing replacements or deletions, allowing them to be repaired without weakening the cap for new growth. Rejections preserve the active snapshot and staged pending uploads. Deleting a document releases its document and chunk capacity.
 
-Saving rewrites the whole snapshot and temporarily requires space for another complete snapshot, including vectors; reads load the PDF bytes too. Keep the current bounded library size and single-worker deployment default. OS locks protect cooperating API processes on local Windows/POSIX filesystems; network filesystems and multiple hosts are unsupported. The optional legacy CLI does not take these API locks and must not write live session directories. Atomic replacement protects against process crashes, but directory fsync, backup rotation, and recovery from disk corruption/power loss are not implemented.
+Saving rewrites the whole snapshot and temporarily requires space for another complete snapshot, including vectors; reads load the PDF bytes too. `MAX_SNAPSHOT_BYTES` bounds both the stored archive and the sum of declared expanded members before any member is read, while `MAX_SNAPSHOT_MEMBERS` bounds its entry count. Keep these settings above the largest valid library implied by the document, storage, and chunk quotas, and verify any increase against host memory and disk capacity. OS locks protect cooperating API processes on local Windows/POSIX filesystems; network filesystems and multiple hosts are unsupported. The optional legacy CLI does not take these API locks and must not write live session directories. Atomic replacement plus directory flushing protects local snapshot publication, but this is not a simultaneous database/filesystem transaction or a replacement for verified off-host backups.
 
 ## Tests and checks
 

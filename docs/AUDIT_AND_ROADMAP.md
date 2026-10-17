@@ -1,5 +1,22 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 17 October 2026 — bounded study snapshot expansion
+
+Study snapshot save and load now reject archives whose stored file, total
+declared expanded members, or member count exceeds configurable bounds. Load
+checks run before reading the FAISS index, metadata, or embedded PDFs, so a
+malformed compressed snapshot cannot trigger unbounded member expansion first.
+Save checks the complete temporary archive before atomic publication, preserving
+the previous snapshot when a newly generated candidate exceeds the same limits.
+
+Regression coverage verifies expansion and member-count rejection occurs before
+any member read and that an oversized save leaves the previous snapshot active.
+The 512 MiB and 1,002-member defaults cover the standard application quotas;
+deployments that deliberately raise storage, document, or chunk limits must tune
+these bounds against available memory and disk. Loading remains whole-snapshot
+rather than streaming, and these resource bounds do not authenticate or encrypt
+snapshot contents.
+
 ## 16 October 2026 — strict study snapshot archive layout
 
 Study snapshot loading now rejects duplicate ZIP member names, missing required

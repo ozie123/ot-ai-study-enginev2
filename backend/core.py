@@ -31,6 +31,9 @@ RULES:
 - Be clear and structured.
 """
 
+DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_SNAPSHOT_MEMBERS = 1002
+
 
 # -----------------------
 # Helpers
@@ -100,6 +103,23 @@ def safe_remove(path: str):
         pass
 
 
+def _configured_limit(
+    name: str,
+    supplied: int | None,
+    default: int,
+    *,
+    maximum: int,
+) -> int:
+    raw = os.getenv(name, "").strip() if supplied is None else str(supplied)
+    try:
+        value = int(raw) if raw else default
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer") from error
+    if not 1 <= value <= maximum:
+        raise RuntimeError(f"{name} must be between 1 and {maximum}")
+    return value
+
+
 def _fsync_directory(path: Path) -> None:
     """Flush directory metadata where the platform exposes that primitive."""
     if os.name == "nt":
@@ -129,7 +149,14 @@ def get_openai_client(api_key: str | None = None) -> OpenAI:
 # Embeddings + FAISS store (PER USER)
 # -----------------------
 class NoteStore:
-    def __init__(self, base_path: Path, api_key: str | None = None):
+    def __init__(
+        self,
+        base_path: Path,
+        api_key: str | None = None,
+        *,
+        max_snapshot_bytes: int | None = None,
+        max_snapshot_members: int | None = None,
+    ):
         # where THIS user's data lives (backend/users/<id>/data)
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -144,6 +171,18 @@ class NoteStore:
         # OpenAI client (optional, can be supplied later)
         self._api_key = api_key
         self._client: OpenAI | None = None
+        self.max_snapshot_bytes = _configured_limit(
+            "MAX_SNAPSHOT_BYTES",
+            max_snapshot_bytes,
+            DEFAULT_MAX_SNAPSHOT_BYTES,
+            maximum=8 * 1024 * 1024 * 1024,
+        )
+        self.max_snapshot_members = _configured_limit(
+            "MAX_SNAPSHOT_MEMBERS",
+            max_snapshot_members,
+            DEFAULT_MAX_SNAPSHOT_MEMBERS,
+            maximum=20_000,
+        )
 
         # in-memory data
         self.chunks: list[str] = []
@@ -318,6 +357,10 @@ class NoteStore:
                             for number, content in enumerate(files.values()):
                                 archive.writestr(f"{group}/{number}", content)
                 f.flush()
+                with zipfile.ZipFile(f) as archive:
+                    self._validate_snapshot_archive_limits(
+                        archive, stored_bytes=os.fstat(f.fileno()).st_size
+                    )
                 os.fsync(f.fileno())
             os.replace(temporary, self.snapshot_path)
             _fsync_directory(self.base_path)
@@ -336,10 +379,16 @@ class NoteStore:
         if self.snapshot_path.exists() or self.snapshot_path.is_symlink():
             descriptor = open_private_regular_file(self.snapshot_path, os.O_RDONLY)
             try:
+                stored_bytes = os.fstat(descriptor).st_size
+                if stored_bytes > self.max_snapshot_bytes:
+                    raise ValueError("Study snapshot exceeds configured size limit")
                 with os.fdopen(descriptor, "rb") as snapshot:
                     descriptor = -1
                     with zipfile.ZipFile(snapshot) as archive:
-                        member_names = [member.filename for member in archive.infolist()]
+                        members = self._validate_snapshot_archive_limits(
+                            archive, stored_bytes=stored_bytes
+                        )
+                        member_names = [member.filename for member in members]
                         if (
                             len(member_names) != len(set(member_names))
                             or not {"index", "metadata"}.issubset(member_names)
@@ -437,6 +486,23 @@ class NoteStore:
                 raise ValueError("Invalid study index metadata entries")
         if payload.get("dim") != index.d:
             raise ValueError("Study index dimensions are inconsistent")
+
+    def _validate_snapshot_archive_limits(
+        self, archive: zipfile.ZipFile, *, stored_bytes: int
+    ) -> list[zipfile.ZipInfo]:
+        if stored_bytes > self.max_snapshot_bytes:
+            raise ValueError("Study snapshot exceeds configured size limit")
+        members = archive.infolist()
+        if len(members) > self.max_snapshot_members:
+            raise ValueError("Study snapshot contains too many members")
+        expanded_bytes = 0
+        for member in members:
+            if member.file_size < 0:
+                raise ValueError("Invalid study snapshot archive")
+            expanded_bytes += member.file_size
+            if expanded_bytes > self.max_snapshot_bytes:
+                raise ValueError("Study snapshot exceeds configured expansion limit")
+        return members
 
     def clear(self, delete_files: bool = True):
         if delete_files:
