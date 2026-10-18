@@ -263,6 +263,9 @@ so store it encrypted with access controls and a retention/deletion policy. The
 creator takes each owner's storage lock, uses SQLite's backup API, writes a
 SHA-256 manifest, flushes and verifies the completed archive before exclusive
 publication, and flushes publication metadata on supported POSIX filesystems.
+Backup files and restore directories use the platform's native atomic
+no-replace rename on Linux, macOS, and Windows, so publication does not require
+hard-link support and cannot overwrite a concurrently created destination.
 Backup and restore staging paths are owner-private and securely randomized, so
 stale process-ID paths cannot block later recovery operations.
 

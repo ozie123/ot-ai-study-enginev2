@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 18 October 2026 — portable exclusive backup publication
+
+Verified backup archives now publish with the same native atomic no-replace
+rename used for verified restore directories. Linux uses
+`renameat2(RENAME_NOREPLACE)`, macOS uses `renamex_np(RENAME_EXCL)`, and Windows
+retains its exclusive rename behavior. This removes the backup destination
+filesystem's hard-link requirement while retaining atomic publication and
+preserving an output created by a competing process.
+
+Regression coverage publishes a regular archive by rename, verifies its staging
+path disappears, and confirms a later source and the existing destination both
+survive a collision. Unsupported platforms still fail closed. This improves
+portable local recovery but does not add archive encryption, off-host retention,
+or a simultaneous point-in-time transaction across SQLite and owner files.
+
 ## 17 October 2026 — bounded study snapshot expansion
 
 Study snapshot save and load now reject archives whose stored file, total

@@ -79,6 +79,24 @@ def test_create_verifies_before_publication_and_preserves_racing_output(tmp_path
     assert not list(tmp_path.glob(".backup.otai.*.tmp"))
 
 
+def test_exclusive_publication_moves_file_without_replacing_destination(tmp_path):
+    source = tmp_path / "staged.otai"
+    destination = tmp_path / "backup.otai"
+    source.write_bytes(b"verified archive")
+
+    backups._publish_path_exclusive(source, destination)
+
+    assert not source.exists()
+    assert destination.read_bytes() == b"verified archive"
+
+    competing_source = tmp_path / "competing.otai"
+    competing_source.write_bytes(b"new archive")
+    with pytest.raises(FileExistsError, match="already exists"):
+        backups._publish_path_exclusive(competing_source, destination)
+    assert competing_source.read_bytes() == b"new archive"
+    assert destination.read_bytes() == b"verified archive"
+
+
 def test_create_failed_verification_never_publishes_or_removes_other_output(tmp_path, monkeypatch):
     source, _ = populated(tmp_path / "live")
     output = tmp_path / "backup.otai"
@@ -256,13 +274,13 @@ def test_restore_preserves_destination_created_during_publication(tmp_path, monk
     backup = tmp_path / "valid.otai"
     backups.create_backup(source, backup)
     destination = tmp_path / "destination"
-    publish = backups._publish_directory_exclusive
+    publish = backups._publish_path_exclusive
 
     def competing_publish(staging, target):
         target.mkdir()
         publish(staging, target)
 
-    monkeypatch.setattr(backups, "_publish_directory_exclusive", competing_publish)
+    monkeypatch.setattr(backups, "_publish_path_exclusive", competing_publish)
     with pytest.raises(FileExistsError, match="already exists"):
         backups.restore_backup(backup, destination)
 

@@ -305,9 +305,9 @@ def create_backup(
                     archive.write(staging / str(item["path"]), str(item["path"]))
             _fsync_file(temporary_output)
             verify_backup(temporary_output, max_uncompressed_bytes)
-            # Both paths share a filesystem. Linking publishes atomically and
-            # fails if another writer has claimed the destination meanwhile.
-            os.link(temporary_output, output)
+            # Both paths share a filesystem. A native no-replace rename publishes
+            # atomically and fails if another writer claimed the destination.
+            _publish_path_exclusive(temporary_output, output)
             _fsync_directory(output.parent)
         return manifest
     finally:
@@ -492,8 +492,8 @@ def verify_backup(
         return _extract_verified(backup, Path(temporary), max_uncompressed_bytes)
 
 
-def _publish_directory_exclusive(staging: Path, destination: Path) -> None:
-    """Atomically publish a directory without replacing a concurrent destination."""
+def _publish_path_exclusive(staging: Path, destination: Path) -> None:
+    """Atomically publish a file or directory without replacing a destination."""
     if os.name == "nt":
         # Windows rename is already no-replace when the destination exists.
         os.rename(staging, destination)
@@ -506,7 +506,7 @@ def _publish_directory_exclusive(staging: Path, destination: Path) -> None:
         try:
             rename_no_replace = libc.renameat2
         except AttributeError as error:
-            raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable") from error
+            raise OSError(errno.ENOTSUP, "Atomic exclusive publication is unavailable") from error
         rename_no_replace.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -519,17 +519,17 @@ def _publish_directory_exclusive(staging: Path, destination: Path) -> None:
         try:
             rename_no_replace = libc.renamex_np
         except AttributeError as error:
-            raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable") from error
+            raise OSError(errno.ENOTSUP, "Atomic exclusive publication is unavailable") from error
         rename_no_replace.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
         result = rename_no_replace(source, target, 4)
     else:
-        raise OSError(errno.ENOTSUP, "Atomic exclusive directory publication is unavailable")
+        raise OSError(errno.ENOTSUP, "Atomic exclusive publication is unavailable")
 
     if result == 0:
         return
     error_number = ctypes.get_errno()
     if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
-        raise FileExistsError(error_number, "Restore destination already exists", destination)
+        raise FileExistsError(error_number, "Destination already exists", destination)
     raise OSError(error_number, os.strerror(error_number), destination)
 
 
@@ -552,7 +552,7 @@ def restore_backup(
         manifest = _extract_verified(backup, staging, max_uncompressed_bytes)
         os.chmod(staging / DATABASE_NAME, 0o600)
         _fsync_tree(staging)
-        _publish_directory_exclusive(staging, destination)
+        _publish_path_exclusive(staging, destination)
         _fsync_directory(destination.parent)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
