@@ -462,6 +462,32 @@ def rewrite_archive(source: Path, destination: Path, mutator):
             changed.writestr(name, data)
 
 
+def test_invalid_manifest_is_rejected_before_any_recovery_file_is_written(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+    with zipfile.ZipFile(valid) as archive:
+        files = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    manifest = json.loads(files[backups.MANIFEST_NAME])
+    manifest["files"].append(
+        {"path": "not-allowed", "size": 0, "sha256": "0" * 64}
+    )
+    files[backups.MANIFEST_NAME] = json.dumps(manifest).encode()
+    malformed = tmp_path / "malformed.otai"
+    with zipfile.ZipFile(malformed, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with pytest.raises(ValueError, match="manifest is invalid"):
+        backups._extract_verified(
+            malformed, staging, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES
+        )
+    assert list(staging.rglob("*")) == []
+
+
 def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"

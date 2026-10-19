@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 19 October 2026 — preflight recovery manifest validation
+
+Backup verification and restore now validate every manifest entry and the exact
+archive member set before creating any staged recovery file. A malformed entry
+late in the manifest can no longer cause earlier valid entries to be extracted
+first, reducing avoidable disk work and leaving the staging root untouched when
+structural validation fails.
+
+Regression coverage appends an invalid final manifest entry after all legitimate
+files, invokes the extraction boundary directly, and verifies rejection leaves
+the staging directory empty. Checksum verification remains streaming during the
+subsequent extraction phase, so corrupted file bytes can still create temporary
+staged data before failing and being cleaned; nothing is published until all
+checks pass.
+
 ## 18 October 2026 — portable exclusive backup publication
 
 Verified backup archives now publish with the same native atomic no-replace

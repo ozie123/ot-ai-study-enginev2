@@ -447,6 +447,7 @@ def _extract_verified(
         manifest = _read_manifest(archive, members)
         listed: set[str] = set()
         owners = set(manifest["owners"])
+        validated_files: list[FileEntry] = []
         for item in manifest["files"]:
             if (
                 not isinstance(item, dict)
@@ -463,6 +464,13 @@ def _extract_verified(
             if members[item["path"]].file_size != item["size"]:
                 raise ValueError(f"Backup checksum failed: {item['path']}")
             listed.add(item["path"])
+            validated_files.append(cast(FileEntry, item))
+        if set(members) != listed | {MANIFEST_NAME} or DATABASE_NAME not in listed:
+            raise ValueError("Backup contents do not match the manifest")
+
+        # Do not write even temporary recovery data until every manifest entry
+        # and the archive's exact member set have passed structural validation.
+        for item in validated_files:
             destination = staging / item["path"]
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             digest = hashlib.sha256()
@@ -476,8 +484,6 @@ def _extract_verified(
                         output.write(chunk)
             if digest.hexdigest() != item["sha256"]:
                 raise ValueError(f"Backup checksum failed: {item['path']}")
-        if set(members) != listed | {MANIFEST_NAME} or DATABASE_NAME not in listed:
-            raise ValueError("Backup contents do not match the manifest")
         _validate_staged_data(staging, manifest)
     return manifest
 
