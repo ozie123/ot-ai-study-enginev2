@@ -359,12 +359,29 @@ def _read_manifest(
         manifest = json.loads(archive.read(MANIFEST_NAME))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("Backup manifest is invalid") from error
-    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT_VERSION:
+    if not isinstance(manifest, dict):
         raise ValueError("Unsupported backup format")
+    format_value = manifest.get("format")
+    if not isinstance(format_value, int) or isinstance(format_value, bool):
+        raise ValueError("Backup manifest is invalid")
+    if format_value != FORMAT_VERSION:
+        raise ValueError("Unsupported backup format")
+    if set(manifest) != {"format", "created_at", "owners", "files"}:
+        raise ValueError("Backup manifest is invalid")
+    created_at = manifest.get("created_at")
+    try:
+        parsed_created_at = (
+            datetime.fromisoformat(created_at) if isinstance(created_at, str) else None
+        )
+    except ValueError as error:
+        raise ValueError("Backup manifest is invalid") from error
     owners = manifest.get("owners")
     files = manifest.get("files")
     if (
-        not isinstance(owners, list)
+        parsed_created_at is None
+        or parsed_created_at.tzinfo is None
+        or parsed_created_at.utcoffset() is None
+        or not isinstance(owners, list)
         or not all(isinstance(owner, str) and OWNER_PATTERN.fullmatch(owner) for owner in owners)
         or owners != sorted(set(owners))
         or not isinstance(files, list)
@@ -451,8 +468,10 @@ def _extract_verified(
         for item in manifest["files"]:
             if (
                 not isinstance(item, dict)
+                or set(item) != {"path", "size", "sha256"}
                 or not isinstance(item.get("path"), str)
                 or not isinstance(item.get("size"), int)
+                or isinstance(item.get("size"), bool)
                 or item["size"] < 0
                 or not isinstance(item.get("sha256"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])

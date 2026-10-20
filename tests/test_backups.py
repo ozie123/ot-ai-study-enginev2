@@ -488,6 +488,41 @@ def test_invalid_manifest_is_rejected_before_any_recovery_file_is_written(tmp_pa
     assert list(staging.rglob("*")) == []
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda manifest: manifest.update({"unexpected": "field"}),
+        lambda manifest: manifest.update({"format": True}),
+        lambda manifest: manifest.update({"created_at": "not-a-timestamp"}),
+        lambda manifest: manifest["files"][0].update({"unexpected": "field"}),
+        lambda manifest: manifest["files"][0].update({"size": True}),
+    ],
+    ids=["top-level-field", "boolean-format", "timestamp", "file-field", "boolean-size"],
+)
+def test_backup_manifest_schema_is_strict_before_extraction(tmp_path, mutate):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+    with zipfile.ZipFile(valid) as archive:
+        files = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    manifest = json.loads(files[backups.MANIFEST_NAME])
+    mutate(manifest)
+    files[backups.MANIFEST_NAME] = json.dumps(manifest).encode()
+    malformed = tmp_path / "malformed.otai"
+    with zipfile.ZipFile(malformed, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with pytest.raises(ValueError, match="manifest is invalid"):
+        backups._extract_verified(
+            malformed, staging, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES
+        )
+    assert list(staging.rglob("*")) == []
+
+
 def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"

@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 20 October 2026 — strict recovery manifest schema
+
+Backup verification and restore now require the versioned manifest's exact
+top-level and file-entry fields, a timezone-aware ISO timestamp, and genuine
+non-negative integer file sizes. Unknown fields and JSON booleans in integer
+positions fail closed instead of being silently accepted or interpreted through
+Python's boolean/integer subtype relationship.
+
+Regression coverage exercises unknown top-level and per-file fields, a malformed
+timestamp, and a boolean file size. Each case is rejected before extraction and
+leaves the staging root empty. This makes format-version handling deterministic;
+it does not cryptographically authenticate archives, encrypt their contents, or
+replace off-host retention and target-infrastructure recovery drills.
+
 ## 19 October 2026 — preflight recovery manifest validation
 
 Backup verification and restore now validate every manifest entry and the exact
