@@ -1,5 +1,21 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 21 October 2026 — checksum preflight before recovery writes
+
+Backup verification and restore now stream every descriptor-pinned archive
+member through SHA-256 before creating any staged recovery file. A checksum-bad
+archive therefore fails without consuming recovery staging space. Extraction
+then hashes the bytes again while writing so an in-place mutation of the already
+opened regular archive between the two passes is also rejected before
+publication.
+
+Regression coverage corrupts one byte without changing the member size and
+verifies checksum rejection leaves the staging directory empty. This trades a
+second decompression/hash pass for a smaller failure footprint; valid archives
+still require staging for SQLite and study-snapshot validation. It does not
+authenticate an archive against a trusted signer, encrypt data, or replace
+off-host retention and target-infrastructure restore drills.
+
 ## 20 October 2026 — strict recovery manifest schema
 
 Backup verification and restore now require the versioned manifest's exact

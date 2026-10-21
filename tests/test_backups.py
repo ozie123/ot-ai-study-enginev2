@@ -523,6 +523,31 @@ def test_backup_manifest_schema_is_strict_before_extraction(tmp_path, mutate):
     assert list(staging.rglob("*")) == []
 
 
+def test_checksum_failure_is_rejected_before_recovery_staging_is_written(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+
+    corrupted = tmp_path / "corrupted.otai"
+
+    def corrupt_database(name, data):
+        if name != backups.DATABASE_NAME:
+            return name, data
+        changed = bytearray(data)
+        changed[-1] ^= 0x01
+        return name, bytes(changed)
+
+    rewrite_archive(valid, corrupted, corrupt_database)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(ValueError, match="checksum failed"):
+        backups._extract_verified(
+            corrupted, staging, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES
+        )
+    assert list(staging.rglob("*")) == []
+
+
 def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"

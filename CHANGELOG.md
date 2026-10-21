@@ -30,6 +30,8 @@
   any staged recovery file.
 - Reject ambiguous recovery manifests with unknown fields, invalid timestamps,
   unexpected file-entry fields, or boolean format/size values.
+- Preflight all backup checksums before staging recovery files, then recheck
+  while extracting to detect in-place archive mutation between passes.
 - Restrict live POSIX session and per-owner study storage to owner-only modes,
   and reject symlinked session databases or owner directories before use.
 - Flush completed backup archives before exclusive publication and flush

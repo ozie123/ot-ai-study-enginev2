@@ -404,6 +404,15 @@ def _allowed_path(path: str, owners: set[str]) -> bool:
     )
 
 
+def _member_sha256(archive: zipfile.ZipFile, path: str) -> str:
+    """Hash one member without writing untrusted bytes to recovery staging."""
+    digest = hashlib.sha256()
+    with archive.open(path) as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _validate_staged_data(staging: Path, manifest: BackupManifest) -> None:
     database_path = staging / DATABASE_NAME
     session_owners = {record[1] for record in _session_records(database_path)}
@@ -487,8 +496,14 @@ def _extract_verified(
         if set(members) != listed | {MANIFEST_NAME} or DATABASE_NAME not in listed:
             raise ValueError("Backup contents do not match the manifest")
 
-        # Do not write even temporary recovery data until every manifest entry
-        # and the archive's exact member set have passed structural validation.
+        # Do not write even temporary recovery data until every manifest entry,
+        # the exact member set, and every descriptor-pinned byte stream pass.
+        for item in validated_files:
+            if _member_sha256(archive, item["path"]) != item["sha256"]:
+                raise ValueError(f"Backup checksum failed: {item['path']}")
+
+        # Recheck hashes while writing: another process could mutate the opened
+        # regular archive in place between the preflight and extraction passes.
         for item in validated_files:
             destination = staging / item["path"]
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

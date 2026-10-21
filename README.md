@@ -281,8 +281,10 @@ streaming pass from the same descriptor-pinned regular archive; symlinked or
 replaced archive paths are rejected. The complete manifest and exact archive
 member set are validated before any recovery file is staged. Versioned manifest
 fields, timestamps, and file-entry types are accepted strictly rather than
-silently ignoring unknown metadata. Case-insensitive path collisions are
-rejected for Windows portability. Verified restore files and directories
+silently ignoring unknown metadata. Every member checksum is also streamed
+before staging, then checked again during extraction to detect in-place archive
+mutation between passes. Case-insensitive path collisions are rejected for
+Windows portability. Verified restore files and directories
 are flushed before atomic publication on POSIX; Windows flushes regular files
 but does not provide directory flushing through this tool. A final metadata
 flush failure reports an error without deleting an already-published complete
