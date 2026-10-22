@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 22 October 2026 — portable recovery compression contract
+
+Backup verification and restore now reject encrypted ZIP members and compression
+methods other than stored or deflated during structural preflight, before any
+member is hashed or any recovery staging path is populated. This matches the
+portable format produced by the backup creator and replaces backend-dependent
+decompression failures with deterministic validation errors.
+
+Regression coverage builds a checksum-valid BZIP2 archive and confirms it fails
+with empty staging, then exercises the encrypted-member flag directly at the
+structural boundary. This does not encrypt archives or authenticate their origin;
+verified backups still require encrypted, access-controlled off-host retention.
+
 ## 21 October 2026 — checksum preflight before recovery writes
 
 Backup verification and restore now stream every descriptor-pinned archive

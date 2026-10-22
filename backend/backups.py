@@ -42,6 +42,7 @@ DATA_FILES = {"study.snapshot", "faiss.index", "chunks.json", "stats.json", "his
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_BACKUP_MEMBERS = 100_000
 DEFAULT_MAX_UNCOMPRESSED_BYTES = 10 * 1024 * 1024 * 1024
+SUPPORTED_COMPRESSION_METHODS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
 
 class FileEntry(TypedDict):
@@ -330,6 +331,10 @@ def _safe_members(
     for info in infos:
         path = Path(info.filename)
         canonical = _portable_name(info.filename)
+        if info.flag_bits & 0x1:
+            raise ValueError("Backup contains encrypted files")
+        if info.compress_type not in SUPPORTED_COMPRESSION_METHODS:
+            raise ValueError("Backup uses an unsupported compression method")
         if (
             info.is_dir()
             or info.filename in members

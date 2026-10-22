@@ -548,6 +548,36 @@ def test_checksum_failure_is_rejected_before_recovery_staging_is_written(tmp_pat
     assert list(staging.rglob("*")) == []
 
 
+def test_unsupported_compression_is_rejected_before_recovery_staging(tmp_path):
+    source, _ = populated(tmp_path / "live")
+    valid = tmp_path / "valid.otai"
+    backups.create_backup(source, valid)
+    with zipfile.ZipFile(valid) as archive:
+        files = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+
+    unsupported = tmp_path / "unsupported.otai"
+    with zipfile.ZipFile(unsupported, "w", compression=zipfile.ZIP_BZIP2) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(ValueError, match="unsupported compression method"):
+        backups._extract_verified(
+            unsupported, staging, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES
+        )
+    assert list(staging.rglob("*")) == []
+
+
+def test_encrypted_member_flag_is_rejected_during_structural_preflight():
+    encrypted = zipfile.ZipInfo(backups.MANIFEST_NAME)
+    encrypted.flag_bits |= 0x1
+    archive = SimpleNamespace(infolist=lambda: [encrypted])
+
+    with pytest.raises(ValueError, match="encrypted files"):
+        backups._safe_members(archive, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES)
+
+
 def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"
