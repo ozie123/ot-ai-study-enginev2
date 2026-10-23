@@ -282,12 +282,14 @@ rejected. The complete manifest and exact archive member set are validated
 before any recovery file is staged. Versioned manifest fields, timestamps, and
 file-entry types are accepted strictly rather than silently ignoring unknown
 metadata. Recovery accepts only unencrypted stored or deflated ZIP members, so
-unsupported or encrypted members fail during structural preflight. Every member
-checksum is streamed before staging, then checked again during extraction to
-detect in-place archive mutation between passes. Case-insensitive path
-collisions are rejected for Windows portability. Verified restore files and
-directories are flushed before atomic publication on POSIX; Windows flushes
-regular files but does not provide directory flushing through this tool. A
+unsupported or encrypted members fail during structural preflight. Members
+whose declared expansion exceeds 100 times their compressed size are also
+rejected before decompression. Every member checksum is streamed before staging,
+then checked again during extraction to detect in-place archive mutation between
+passes. Case-insensitive path collisions are rejected for Windows portability.
+Verified restore files and directories are flushed before atomic publication
+on POSIX; Windows flushes regular files but does not provide directory flushing
+through this tool. A
 final metadata flush failure reports an error without deleting an
 already-published complete output. On POSIX systems, created archives and
 restored files use mode `0600`, while restored data roots use `0700`; retain

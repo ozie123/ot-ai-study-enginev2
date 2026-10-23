@@ -41,6 +41,7 @@ TOKEN_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DATA_FILES = {"study.snapshot", "faiss.index", "chunks.json", "stats.json", "history.jsonl"}
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_BACKUP_MEMBERS = 100_000
+MAX_BACKUP_COMPRESSION_RATIO = 100
 DEFAULT_MAX_UNCOMPRESSED_BYTES = 10 * 1024 * 1024 * 1024
 SUPPORTED_COMPRESSION_METHODS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
@@ -335,6 +336,12 @@ def _safe_members(
             raise ValueError("Backup contains encrypted files")
         if info.compress_type not in SUPPORTED_COMPRESSION_METHODS:
             raise ValueError("Backup uses an unsupported compression method")
+        if (
+            info.file_size > 0
+            and info.file_size
+            > info.compress_size * MAX_BACKUP_COMPRESSION_RATIO
+        ):
+            raise ValueError("Backup contains an unsafe compression ratio")
         if (
             info.is_dir()
             or info.filename in members

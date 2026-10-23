@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 23 October 2026 — recovery compression-ratio preflight
+
+Backup verification and restore now reject any non-empty ZIP member whose
+declared expanded size is more than 100 times its compressed size. The check
+runs during structural preflight, before member decompression, hashing, or
+recovery staging, and complements the existing member-count and 10 GiB total
+expanded-size limits.
+
+Regression coverage uses a highly compressed member and confirms rejection
+leaves recovery staging empty. The threshold matches the upload policy and the
+backup creator's supported format. It reduces ZIP-bomb exposure but does not
+replace an infrastructure-level archive-size budget or deployment-specific
+tuning of the total recovery expansion limit.
+
 ## 22 October 2026 — portable recovery compression contract
 
 Backup verification and restore now reject encrypted ZIP members and compression

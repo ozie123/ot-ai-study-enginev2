@@ -578,6 +578,22 @@ def test_encrypted_member_flag_is_rejected_during_structural_preflight():
         backups._safe_members(archive, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES)
 
 
+def test_high_compression_ratio_is_rejected_before_recovery_staging(tmp_path):
+    compressed = tmp_path / "compressed.otai"
+    with zipfile.ZipFile(
+        compressed, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
+        archive.writestr(backups.MANIFEST_NAME, b"A" * 200_000)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(ValueError, match="unsafe compression ratio"):
+        backups._extract_verified(
+            compressed, staging, backups.DEFAULT_MAX_UNCOMPRESSED_BYTES
+        )
+    assert list(staging.rglob("*")) == []
+
+
 def test_verify_rejects_checksum_failure_extra_and_traversal(tmp_path):
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"
