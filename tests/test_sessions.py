@@ -102,6 +102,27 @@ def test_session_database_rejects_symlink(tmp_path):
     assert target.read_bytes() == b"outside"
 
 
+@pytest.mark.parametrize(
+    "column,value",
+    [("user_id", "../../outside"), ("expires_at", "never")],
+)
+def test_live_lookup_rejects_malformed_session_records(tmp_path, column, value):
+    root = tmp_path / "users"
+    token, _, _ = sessions.create(root)
+    statement = {
+        "user_id": "UPDATE sessions SET user_id = ? WHERE token_hash = ?",
+        "expires_at": "UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+    }[column]
+    with sqlite3.connect(root / "sessions.sqlite3") as connection:
+        connection.execute(
+            statement,
+            (value, sessions.token_hash(token)),
+        )
+
+    with pytest.raises(ValueError, match="invalid record"):
+        sessions.lookup(root, token)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink regression")
 def test_user_storage_rejects_symlinked_owner_directory(tmp_path, monkeypatch):
     root = tmp_path / "users"

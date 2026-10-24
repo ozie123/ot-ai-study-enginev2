@@ -1,5 +1,17 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 24 October 2026 — strict live session-record validation
+
+Live session lookup now validates that a matched SQLite record contains the
+expected opaque owner identifier and a genuine integer expiry before it can
+authenticate a request. Malformed persisted values fail closed instead of being
+coerced with `str()` or `int()` and passed onward to storage selection.
+
+Regression coverage tampers both the owner and expiry fields for an otherwise
+valid token and confirms lookup rejects each record. This aligns the live auth
+boundary with backup validation; it does not add accounts, password recovery,
+cross-device identity, or protection from a privileged database writer.
+
 ## 23 October 2026 — recovery compression-ratio preflight
 
 Backup verification and restore now reject any non-empty ZIP member whose

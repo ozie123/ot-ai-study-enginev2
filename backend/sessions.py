@@ -23,6 +23,7 @@ except ImportError:  # Supports `uvicorn server:app --app-dir backend`.
 
 SESSION_SECONDS = 30 * 24 * 60 * 60
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+USER_ID_PATTERN = re.compile(r"^s_[0-9a-f]{32}$")
 
 
 def require_same_origin_write(request: Request) -> None:
@@ -68,7 +69,17 @@ def lookup(root: Path, token: str | None) -> tuple[str, int] | None:
             "SELECT user_id, expires_at FROM sessions WHERE token_hash = ? AND expires_at > ?",
             (token_hash(token), int(time.time())),
         ).fetchone()
-    return (str(row[0]), int(row[1])) if row else None
+    if row is None:
+        return None
+    user_id, expires_at = row
+    if (
+        not isinstance(user_id, str)
+        or not USER_ID_PATTERN.fullmatch(user_id)
+        or not isinstance(expires_at, int)
+        or isinstance(expires_at, bool)
+    ):
+        raise ValueError("Session database contains an invalid record")
+    return user_id, expires_at
 
 
 def create(root: Path) -> tuple[str, str, int]:
