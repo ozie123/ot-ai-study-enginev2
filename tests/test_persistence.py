@@ -145,7 +145,7 @@ def test_load_rejects_duplicate_snapshot_member(tmp_path):
 def test_load_rejects_snapshot_expansion_before_reading_members(tmp_path, monkeypatch):
     snapshot = tmp_path / "study.snapshot"
     with zipfile.ZipFile(snapshot, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("index", b"x" * 10_000)
+        archive.writestr("index", bytes(range(256)) * 40)
         archive.writestr("metadata", b"{}")
     with zipfile.ZipFile(snapshot) as archive:
         expanded = sum(member.file_size for member in archive.infolist())
@@ -158,6 +158,27 @@ def test_load_rejects_snapshot_expansion_before_reading_members(tmp_path, monkey
     monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
     with pytest.raises(ValueError, match="configured expansion limit"):
         NoteStore(tmp_path, max_snapshot_bytes=(stored + expanded) // 2).load()
+
+
+def test_load_rejects_unsafe_snapshot_compression_before_reading_members(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "study.snapshot"
+    with zipfile.ZipFile(
+        snapshot, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
+        archive.writestr("index", b"x" * 1_000_000)
+        archive.writestr("metadata", b"{}")
+    with zipfile.ZipFile(snapshot) as archive:
+        index = archive.getinfo("index")
+        assert index.file_size > index.compress_size * core.MAX_SNAPSHOT_COMPRESSION_RATIO
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("snapshot members must not be read before ratio validation")
+
+    monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
+    with pytest.raises(ValueError, match="unsafe compression ratio"):
+        NoteStore(tmp_path).load()
 
 
 def test_load_rejects_excess_snapshot_members_before_reading_them(tmp_path, monkeypatch):

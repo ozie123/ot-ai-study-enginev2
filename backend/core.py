@@ -33,6 +33,7 @@ RULES:
 
 DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_SNAPSHOT_MEMBERS = 1002
+MAX_SNAPSHOT_COMPRESSION_RATIO = 100
 
 
 # -----------------------
@@ -499,6 +500,12 @@ class NoteStore:
         for member in members:
             if member.file_size < 0:
                 raise ValueError("Invalid study snapshot archive")
+            if (
+                member.file_size > 0
+                and member.file_size
+                > member.compress_size * MAX_SNAPSHOT_COMPRESSION_RATIO
+            ):
+                raise ValueError("Study snapshot has an unsafe compression ratio")
             expanded_bytes += member.file_size
             if expanded_bytes > self.max_snapshot_bytes:
                 raise ValueError("Study snapshot exceeds configured expansion limit")

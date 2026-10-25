@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 25 October 2026 — study snapshot compression-ratio preflight
+
+Study snapshot save and load now reject any non-empty ZIP member whose declared
+expanded size is more than 100 times its compressed size. The check runs with
+the existing size and member-count preflight before reading the FAISS index,
+metadata, or embedded PDFs.
+
+Regression coverage uses a highly compressed snapshot member and confirms
+rejection happens before any member read. The threshold matches upload and
+backup recovery policy. It reduces decompression resource-exhaustion exposure;
+whole snapshots still load into memory, and the check does not authenticate or
+encrypt snapshot contents.
+
 ## 24 October 2026 — strict live session-record validation
 
 Live session lookup now validates that a matched SQLite record contains the
