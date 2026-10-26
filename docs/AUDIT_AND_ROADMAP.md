@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 26 October 2026 — portable study snapshot compression contract
+
+Study snapshot save and load now reject encrypted ZIP members and compression
+methods other than stored or deflated during structural preflight, before any
+member is read. This matches the portable formats accepted by backup recovery
+and prevents backend-dependent decompression behavior at the live persistence
+boundary.
+
+Regression coverage confirms BZIP2 and encrypted members fail before the FAISS
+index, metadata, or embedded PDFs are read. This validates the snapshot format;
+it does not encrypt or authenticate snapshots, and verified off-host backups
+remain necessary.
+
 ## 25 October 2026 — study snapshot compression-ratio preflight
 
 Study snapshot save and load now reject any non-empty ZIP member whose declared

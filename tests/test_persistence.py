@@ -181,6 +181,40 @@ def test_load_rejects_unsafe_snapshot_compression_before_reading_members(
         NoteStore(tmp_path).load()
 
 
+def test_load_rejects_unsupported_snapshot_compression_before_reading_members(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "study.snapshot"
+    with zipfile.ZipFile(snapshot, "w", compression=zipfile.ZIP_BZIP2) as archive:
+        archive.writestr("index", b"index")
+        archive.writestr("metadata", b"{}")
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("snapshot members must not be read before format validation")
+
+    monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
+    with pytest.raises(ValueError, match="unsupported compression method"):
+        NoteStore(tmp_path).load()
+
+
+def test_load_rejects_encrypted_snapshot_member_before_reading_it(tmp_path, monkeypatch):
+    populated(tmp_path).save()
+    infolist = core.zipfile.ZipFile.infolist
+
+    def encrypted_members(archive):
+        members = infolist(archive)
+        members[0].flag_bits |= 0x1
+        return members
+
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("snapshot members must not be read before encryption validation")
+
+    monkeypatch.setattr(core.zipfile.ZipFile, "infolist", encrypted_members)
+    monkeypatch.setattr(core.zipfile.ZipFile, "read", unexpected_read)
+    with pytest.raises(ValueError, match="encrypted members"):
+        NoteStore(tmp_path).load()
+
+
 def test_load_rejects_excess_snapshot_members_before_reading_them(tmp_path, monkeypatch):
     populated(tmp_path).save()
 

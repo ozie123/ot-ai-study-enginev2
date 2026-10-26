@@ -34,6 +34,9 @@ RULES:
 DEFAULT_MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_SNAPSHOT_MEMBERS = 1002
 MAX_SNAPSHOT_COMPRESSION_RATIO = 100
+SUPPORTED_SNAPSHOT_COMPRESSION_METHODS = frozenset(
+    {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+)
 
 
 # -----------------------
@@ -500,6 +503,10 @@ class NoteStore:
         for member in members:
             if member.file_size < 0:
                 raise ValueError("Invalid study snapshot archive")
+            if member.flag_bits & 0x1:
+                raise ValueError("Study snapshot contains encrypted members")
+            if member.compress_type not in SUPPORTED_SNAPSHOT_COMPRESSION_METHODS:
+                raise ValueError("Study snapshot uses an unsupported compression method")
             if (
                 member.file_size > 0
                 and member.file_size
