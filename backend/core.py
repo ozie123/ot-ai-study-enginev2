@@ -398,13 +398,13 @@ class NoteStore:
                             or not {"index", "metadata"}.issubset(member_names)
                         ):
                             raise ValueError("Invalid study snapshot archive")
-                        index = faiss.deserialize_index(
-                            np.frombuffer(archive.read("index"), dtype="uint8").copy()
-                        )
                         payload = json.loads(archive.read("metadata"))
+                        if not isinstance(payload, dict):
+                            raise ValueError("Invalid study index metadata")
                         expected_members = {"index", "metadata"}
-                        if isinstance(payload, dict) and "documents" in payload:
-                            groups = []
+                        document_names: dict[str, list[str]] | None = None
+                        if "documents" in payload:
+                            document_names = {}
                             for group in ("documents", "pending"):
                                 names = payload.get(group)
                                 if (
@@ -422,15 +422,21 @@ class NoteStore:
                                 expected_members.update(
                                     f"{group}/{i}" for i in range(len(names))
                                 )
-                                groups.append(
-                                    {
-                                        name: archive.read(f"{group}/{i}")
-                                        for i, name in enumerate(names)
-                                    }
-                                )
-                            documents, pending = groups
+                                document_names[group] = names
                         if set(member_names) != expected_members:
                             raise ValueError("Invalid study snapshot archive")
+                        index = faiss.deserialize_index(
+                            np.frombuffer(archive.read("index"), dtype="uint8").copy()
+                        )
+                        if document_names is not None:
+                            documents = {
+                                name: archive.read(f"documents/{i}")
+                                for i, name in enumerate(document_names["documents"])
+                            }
+                            pending = {
+                                name: archive.read(f"pending/{i}")
+                                for i, name in enumerate(document_names["pending"])
+                            }
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)

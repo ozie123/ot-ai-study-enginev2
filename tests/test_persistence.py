@@ -127,6 +127,22 @@ def test_load_rejects_unexpected_snapshot_member(tmp_path):
     assert loaded.chunks == ["in-memory"]
 
 
+def test_load_rejects_unexpected_member_before_deserializing_index(
+    tmp_path, monkeypatch
+):
+    store = populated(tmp_path)
+    store.save()
+    with zipfile.ZipFile(store.snapshot_path, "a") as archive:
+        archive.writestr("unexpected", b"hidden data")
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before layout validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Invalid study snapshot archive"):
+        NoteStore(tmp_path).load()
+
+
 def test_load_rejects_duplicate_snapshot_member(tmp_path):
     store = populated(tmp_path)
     store.save()

@@ -1,5 +1,17 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 27 October 2026 — snapshot layout preflight before FAISS parsing
+
+Study snapshot loading now reads and validates the metadata document manifest
+and confirms the exact archive member set before deserializing the FAISS index
+or reading embedded PDF bytes. Unexpected or undeclared content therefore fails
+at the structural boundary instead of reaching the native index parser first.
+
+Regression coverage appends an unexpected snapshot member and confirms failure
+occurs before `faiss.deserialize_index`. Metadata is still read as the source of
+the expected layout, and the existing whole-snapshot memory bound still applies;
+this does not authenticate or encrypt snapshot contents.
+
 ## 26 October 2026 — portable study snapshot compression contract
 
 Study snapshot save and load now reject encrypted ZIP members and compression
