@@ -29,6 +29,17 @@ def legacy(store):
     }))
 
 
+def replace_snapshot_metadata(snapshot, **updates):
+    with zipfile.ZipFile(snapshot) as archive:
+        files = {member.filename: archive.read(member) for member in archive.infolist()}
+    payload = json.loads(files["metadata"])
+    payload.update(updates)
+    files["metadata"] = json.dumps(payload).encode()
+    with zipfile.ZipFile(snapshot, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+
 def test_snapshot_roundtrip_and_search(tmp_path, monkeypatch):
     store = populated(tmp_path)
     store.save()
@@ -140,6 +151,22 @@ def test_load_rejects_unexpected_member_before_deserializing_index(
 
     monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
     with pytest.raises(ValueError, match="Invalid study snapshot archive"):
+        NoteStore(tmp_path).load()
+
+
+@pytest.mark.parametrize("field,value", [("unexpected", "value"), ("dim", True)])
+def test_load_rejects_invalid_metadata_schema_before_deserializing_index(
+    tmp_path, monkeypatch, field, value
+):
+    store = populated(tmp_path)
+    store.save()
+    replace_snapshot_metadata(store.snapshot_path, **{field: value})
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before metadata validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Invalid study index metadata"):
         NoteStore(tmp_path).load()
 
 

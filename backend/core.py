@@ -37,6 +37,8 @@ MAX_SNAPSHOT_COMPRESSION_RATIO = 100
 SUPPORTED_SNAPSHOT_COMPRESSION_METHODS = frozenset(
     {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 )
+SNAPSHOT_INDEX_METADATA_FIELDS = frozenset({"chunks", "tags", "meta", "dim"})
+SNAPSHOT_DOCUMENT_METADATA_FIELDS = frozenset({"documents", "pending"})
 
 
 # -----------------------
@@ -337,10 +339,10 @@ class NoteStore:
             "meta": self.meta,
             "dim": self.dim if self.index is not None else index.d,
         }
-        self._validate_snapshot(index, payload)
         if self.documents is not None:
             payload["documents"] = list(self.documents)
             payload["pending"] = list(self.pending)
+        self._validate_snapshot(index, payload)
         # A single replacement publishes vectors and metadata together. Never
         # overwrite the active snapshot until both have been flushed to disk,
         # then flush the directory entry so publication survives power loss.
@@ -399,8 +401,7 @@ class NoteStore:
                         ):
                             raise ValueError("Invalid study snapshot archive")
                         payload = json.loads(archive.read("metadata"))
-                        if not isinstance(payload, dict):
-                            raise ValueError("Invalid study index metadata")
+                        self._validate_snapshot_metadata(payload)
                         expected_members = {"index", "metadata"}
                         document_names: dict[str, list[str]] | None = None
                         if "documents" in payload:
@@ -485,15 +486,36 @@ class NoteStore:
         self.meta = [self.meta[i] for i in keep]
 
     @staticmethod
-    def _validate_snapshot(index, payload):
+    def _validate_snapshot_metadata(payload):
         if not isinstance(payload, dict):
             raise ValueError("Invalid study index metadata")
+        expected_fields = SNAPSHOT_INDEX_METADATA_FIELDS
+        if "documents" in payload:
+            expected_fields |= SNAPSHOT_DOCUMENT_METADATA_FIELDS
+        if set(payload) != expected_fields:
+            raise ValueError("Invalid study index metadata fields")
         for key, item_type in (("chunks", str), ("tags", str), ("meta", dict)):
             values = payload.get(key)
-            if not isinstance(values, list) or len(values) != index.ntotal:
-                raise ValueError("Study index files are inconsistent")
+            if not isinstance(values, list):
+                raise ValueError("Invalid study index metadata")
             if not all(isinstance(value, item_type) for value in values):
                 raise ValueError("Invalid study index metadata entries")
+        dimension = payload.get("dim")
+        if type(dimension) is not int or dimension <= 0:
+            raise ValueError("Invalid study index metadata dimension")
+        if "documents" in payload and not all(
+            isinstance(payload.get(group), list)
+            and all(isinstance(name, str) for name in payload[group])
+            for group in ("documents", "pending")
+        ):
+            raise ValueError("Invalid document manifest")
+
+    @classmethod
+    def _validate_snapshot(cls, index, payload):
+        cls._validate_snapshot_metadata(payload)
+        for key in ("chunks", "tags", "meta"):
+            if len(payload[key]) != index.ntotal:
+                raise ValueError("Study index files are inconsistent")
         if payload.get("dim") != index.d:
             raise ValueError("Study index dimensions are inconsistent")
 

@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 28 October 2026 — strict snapshot metadata schema
+
+Study snapshot save and load now require the exact supported top-level metadata
+fields, genuine lists for chunk/tag/source entries, and a genuine positive
+integer vector dimension. Document-aware snapshots must include both document
+and pending manifests. Unknown fields and Python boolean/integer confusion fail
+before FAISS deserialization.
+
+Regression coverage injects an unknown field and a boolean dimension into an
+otherwise valid snapshot, confirming both fail before the native index parser.
+This makes the local format deterministic; it does not add a versioned migration
+framework, cryptographic authentication, or encryption.
+
 ## 27 October 2026 — snapshot layout preflight before FAISS parsing
 
 Study snapshot loading now reads and validates the metadata document manifest
