@@ -170,6 +170,46 @@ def test_load_rejects_invalid_metadata_schema_before_deserializing_index(
         NoteStore(tmp_path).load()
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [{"source": 7, "page": 1}],
+        [{"source": "notes.pdf", "page": True}],
+        [{"source": "notes.pdf", "page": 1, "is_gold": 0}],
+        [{"source": "notes.pdf", "page": 1, "document_sha256": "invalid"}],
+        [{"source": "notes.pdf", "page": 1, "document_sha256": 7}],
+        [{"source": "notes.pdf", "page": 1, "unexpected": "value"}],
+    ],
+)
+def test_load_rejects_invalid_chunk_metadata_before_deserializing_index(
+    tmp_path, monkeypatch, metadata
+):
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": b"%PDF document"}
+    store.save()
+    replace_snapshot_metadata(store.snapshot_path, meta=metadata)
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before metadata validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Invalid study chunk metadata"):
+        NoteStore(tmp_path).load()
+
+
+def test_invalid_chunk_metadata_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": b"%PDF document"}
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.meta = [{"source": "notes.pdf", "page": False}]
+
+    with pytest.raises(ValueError, match="Invalid study chunk metadata"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
 def test_load_rejects_duplicate_snapshot_member(tmp_path):
     store = populated(tmp_path)
     store.save()

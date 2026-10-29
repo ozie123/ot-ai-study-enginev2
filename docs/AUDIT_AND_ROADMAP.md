@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 29 October 2026 — strict document chunk provenance
+
+Document-aware study snapshots now validate every chunk's provenance before
+FAISS deserialization. Each entry requires a non-empty string source, permits
+only the supported source/page/gold/checksum fields, rejects boolean or
+non-positive page numbers, requires a real boolean gold flag when present, and
+requires document checksums to be lowercase SHA-256 hex.
+
+Regression coverage exercises each invalid field category before the native
+index parser and confirms invalid in-memory provenance cannot replace an
+existing snapshot. Pre-document CLI snapshots retain their legacy compatibility;
+this validation does not authenticate snapshot content or replace encrypted,
+verified off-host backups.
+
 ## 28 October 2026 — strict snapshot metadata schema
 
 Study snapshot save and load now require the exact supported top-level metadata

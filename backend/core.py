@@ -39,6 +39,9 @@ SUPPORTED_SNAPSHOT_COMPRESSION_METHODS = frozenset(
 )
 SNAPSHOT_INDEX_METADATA_FIELDS = frozenset({"chunks", "tags", "meta", "dim"})
 SNAPSHOT_DOCUMENT_METADATA_FIELDS = frozenset({"documents", "pending"})
+SNAPSHOT_CHUNK_METADATA_FIELDS = frozenset(
+    {"source", "page", "is_gold", "document_sha256"}
+)
 
 
 # -----------------------
@@ -509,6 +512,25 @@ class NoteStore:
             for group in ("documents", "pending")
         ):
             raise ValueError("Invalid document manifest")
+        if "documents" in payload:
+            for entry in payload["meta"]:
+                if (
+                    not set(entry) <= SNAPSHOT_CHUNK_METADATA_FIELDS
+                    or not isinstance(entry.get("source"), str)
+                    or not entry["source"]
+                ):
+                    raise ValueError("Invalid study chunk metadata")
+                page = entry.get("page")
+                if page is not None and (type(page) is not int or page <= 0):
+                    raise ValueError("Invalid study chunk metadata")
+                if "is_gold" in entry and not isinstance(entry["is_gold"], bool):
+                    raise ValueError("Invalid study chunk metadata")
+                document_sha256 = entry.get("document_sha256")
+                if document_sha256 is not None and (
+                    not isinstance(document_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", document_sha256) is None
+                ):
+                    raise ValueError("Invalid study chunk metadata")
 
     @classmethod
     def _validate_snapshot(cls, index, payload):
