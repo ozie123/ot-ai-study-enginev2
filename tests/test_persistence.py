@@ -40,6 +40,15 @@ def replace_snapshot_metadata(snapshot, **updates):
             archive.writestr(name, content)
 
 
+def replace_snapshot_metadata_bytes(snapshot, metadata):
+    with zipfile.ZipFile(snapshot) as archive:
+        files = {member.filename: archive.read(member) for member in archive.infolist()}
+    files["metadata"] = metadata
+    with zipfile.ZipFile(snapshot, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+
 def test_snapshot_roundtrip_and_search(tmp_path, monkeypatch):
     store = populated(tmp_path)
     store.save()
@@ -167,6 +176,28 @@ def test_load_rejects_invalid_metadata_schema_before_deserializing_index(
 
     monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
     with pytest.raises(ValueError, match="Invalid study index metadata"):
+        NoteStore(tmp_path).load()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        b'{"chunks":["original"],"tags":["week1"],"meta":[{}],"dim":2,"dim":3}',
+        b'{"chunks":["original"],"tags":["week1"],"meta":[{"source":"notes.pdf","source":"other.pdf"}],"dim":2}',
+    ],
+)
+def test_load_rejects_duplicate_json_fields_before_deserializing_index(
+    tmp_path, monkeypatch, metadata
+):
+    store = populated(tmp_path)
+    store.save()
+    replace_snapshot_metadata_bytes(store.snapshot_path, metadata)
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before metadata validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Duplicate study snapshot metadata field"):
         NoteStore(tmp_path).load()
 
 

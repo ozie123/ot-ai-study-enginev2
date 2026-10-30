@@ -1,5 +1,18 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 30 October 2026 — unambiguous snapshot JSON metadata
+
+Study snapshot loading now rejects duplicate JSON object keys at every metadata
+nesting level. The check runs while decoding metadata and therefore precedes
+FAISS deserialization, embedded-PDF reads, and the existing schema checks. This
+prevents a corrupted snapshot from relying on parser-specific first-key or
+last-key interpretation.
+
+Regression coverage injects duplicate top-level dimension keys and duplicate
+nested chunk-source keys, confirming neither reaches the native index parser.
+This establishes one canonical parse but does not cryptographically authenticate
+or encrypt snapshot content.
+
 ## 29 October 2026 — strict document chunk provenance
 
 Document-aware study snapshots now validate every chunk's provenance before

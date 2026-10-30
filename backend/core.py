@@ -51,6 +51,15 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def reject_duplicate_snapshot_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate study snapshot metadata field")
+        result[key] = value
+    return result
+
+
 def chunk_text(text: str, max_chars: int = 900) -> list[str]:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
@@ -403,7 +412,10 @@ class NoteStore:
                             or not {"index", "metadata"}.issubset(member_names)
                         ):
                             raise ValueError("Invalid study snapshot archive")
-                        payload = json.loads(archive.read("metadata"))
+                        payload = json.loads(
+                            archive.read("metadata"),
+                            object_pairs_hook=reject_duplicate_snapshot_fields,
+                        )
                         self._validate_snapshot_metadata(payload)
                         expected_members = {"index", "metadata"}
                         document_names: dict[str, list[str]] | None = None
