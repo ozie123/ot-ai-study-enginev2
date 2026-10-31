@@ -547,6 +547,8 @@ class NoteStore:
     @classmethod
     def _validate_snapshot(cls, index, payload):
         cls._validate_snapshot_metadata(payload)
+        if type(index) is not faiss.IndexFlatIP:
+            raise ValueError("Unsupported study index type")
         for key in ("chunks", "tags", "meta"):
             if len(payload[key]) != index.ntotal:
                 raise ValueError("Study index files are inconsistent")

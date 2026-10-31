@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 31 October 2026 — exact persisted vector-index contract
+
+Study snapshot save and load now require the exact FAISS `IndexFlatIP` type used
+by normalized cosine retrieval. Alternate distance metrics and wrapper indexes
+fail closed even when their dimensions and row counts match the metadata. The
+check also runs before snapshot publication, so an unsupported in-memory index
+cannot replace the active store.
+
+Regression coverage substitutes both a flat L2 index and an inner-product ID
+map into otherwise valid snapshots, confirms load preserves existing in-memory
+state, and confirms a failed save preserves the previous snapshot. Native FAISS
+still parses the bounded index member before its concrete type can be checked;
+this is a format constraint, not cryptographic snapshot authentication.
+
 ## 30 October 2026 — unambiguous snapshot JSON metadata
 
 Study snapshot loading now rejects duplicate JSON object keys at every metadata

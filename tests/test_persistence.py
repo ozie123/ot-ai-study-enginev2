@@ -49,6 +49,15 @@ def replace_snapshot_metadata_bytes(snapshot, metadata):
             archive.writestr(name, content)
 
 
+def replace_snapshot_index(snapshot, index):
+    with zipfile.ZipFile(snapshot) as archive:
+        files = {member.filename: archive.read(member) for member in archive.infolist()}
+    files["index"] = faiss.serialize_index(index).tobytes()
+    with zipfile.ZipFile(snapshot, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+
 def test_snapshot_roundtrip_and_search(tmp_path, monkeypatch):
     store = populated(tmp_path)
     store.save()
@@ -199,6 +208,40 @@ def test_load_rejects_duplicate_json_fields_before_deserializing_index(
     monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
     with pytest.raises(ValueError, match="Duplicate study snapshot metadata field"):
         NoteStore(tmp_path).load()
+
+
+@pytest.mark.parametrize("kind", ["l2", "id-map"])
+def test_load_rejects_unsupported_faiss_index_type(tmp_path, kind):
+    store = populated(tmp_path)
+    store.save()
+    if kind == "l2":
+        replacement = faiss.IndexFlatL2(2)
+        replacement.add(np.array([[1, 0]], dtype="float32"))
+    else:
+        replacement = faiss.IndexIDMap(faiss.IndexFlatIP(2))
+        replacement.add_with_ids(
+            np.array([[1, 0]], dtype="float32"), np.array([7], dtype="int64")
+        )
+    replace_snapshot_index(store.snapshot_path, replacement)
+
+    loaded = populated(tmp_path, text="in-memory")
+    with pytest.raises(ValueError, match="Unsupported study index type"):
+        loaded.load()
+    assert loaded.chunks == ["in-memory"]
+
+
+def test_unsupported_faiss_index_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    replacement = faiss.IndexFlatL2(2)
+    replacement.add(np.array([[1, 0]], dtype="float32"))
+    store.index = replacement
+
+    with pytest.raises(ValueError, match="Unsupported study index type"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
 
 
 @pytest.mark.parametrize(
