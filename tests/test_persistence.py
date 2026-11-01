@@ -245,6 +245,40 @@ def test_unsupported_faiss_index_save_preserves_previous_snapshot(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "vector",
+    [
+        np.array([[2, 0]], dtype="float32"),
+        np.array([[np.nan, 0]], dtype="float32"),
+    ],
+)
+def test_load_rejects_invalid_persisted_vectors(tmp_path, vector):
+    store = populated(tmp_path)
+    store.save()
+    replacement = faiss.IndexFlatIP(2)
+    replacement.add(vector)
+    replace_snapshot_index(store.snapshot_path, replacement)
+
+    loaded = populated(tmp_path, text="in-memory")
+    with pytest.raises(ValueError, match="Invalid study index vectors"):
+        loaded.load()
+    assert loaded.chunks == ["in-memory"]
+
+
+def test_invalid_vector_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    replacement = faiss.IndexFlatIP(2)
+    replacement.add(np.array([[2, 0]], dtype="float32"))
+    store.index = replacement
+
+    with pytest.raises(ValueError, match="Invalid study index vectors"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
     "metadata",
     [
         [{"source": 7, "page": 1}],

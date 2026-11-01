@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 1 November 2026 — persisted vector-value contract
+
+Study snapshot save and load now require every persisted FAISS vector to contain
+only finite values and to have unit length within a narrow floating-point
+tolerance. This enforces the normalized-vector assumption behind cosine
+retrieval after the exact `IndexFlatIP` type, row count, and dimension checks.
+Non-normalized, zero-length, NaN, or infinite vectors fail closed before state
+is installed or a replacement snapshot is published.
+
+Regression coverage substitutes both non-normalized and NaN vectors into an
+otherwise valid snapshot, confirms failed loading preserves existing in-memory
+state, and confirms a failed save preserves the active snapshot. Validation is
+linear in the number of indexed chunks and reconstructs one vector at a time to
+bound additional memory; it does not authenticate or encrypt snapshot content.
+
 ## 31 October 2026 — exact persisted vector-index contract
 
 Study snapshot save and load now require the exact FAISS `IndexFlatIP` type used

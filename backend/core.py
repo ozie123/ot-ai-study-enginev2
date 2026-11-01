@@ -554,6 +554,13 @@ class NoteStore:
                 raise ValueError("Study index files are inconsistent")
         if payload.get("dim") != index.d:
             raise ValueError("Study index dimensions are inconsistent")
+        for position in range(index.ntotal):
+            vector = np.asarray(index.reconstruct(position), dtype="float32")
+            norm = float(np.linalg.norm(vector))
+            if not np.isfinite(vector).all() or not np.isclose(
+                norm, 1.0, rtol=1e-4, atol=1e-5
+            ):
+                raise ValueError("Invalid study index vectors")
 
     def _validate_snapshot_archive_limits(
         self, archive: zipfile.ZipFile, *, stored_bytes: int
