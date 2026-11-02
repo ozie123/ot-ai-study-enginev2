@@ -60,6 +60,10 @@ def reject_duplicate_snapshot_fields(pairs: list[tuple[str, object]]) -> dict[st
     return result
 
 
+def reject_nonstandard_json_constant(_value: str) -> None:
+    raise ValueError("Invalid study snapshot metadata JSON")
+
+
 def chunk_text(text: str, max_chars: int = 900) -> list[str]:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
@@ -355,6 +359,12 @@ class NoteStore:
             payload["documents"] = list(self.documents)
             payload["pending"] = list(self.pending)
         self._validate_snapshot(index, payload)
+        try:
+            serialized_metadata = json.dumps(
+                payload, ensure_ascii=False, allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid study snapshot metadata JSON") from exc
         # A single replacement publishes vectors and metadata together. Never
         # overwrite the active snapshot until both have been flushed to disk,
         # then flush the directory entry so publication survives power loss.
@@ -366,7 +376,7 @@ class NoteStore:
                 temporary = Path(f.name)
                 with zipfile.ZipFile(f, "w") as archive:
                     archive.writestr("index", faiss.serialize_index(index).tobytes())
-                    archive.writestr("metadata", json.dumps(payload, ensure_ascii=False))
+                    archive.writestr("metadata", serialized_metadata)
                     if self.documents is not None:
                         for group, files in (
                             ("documents", self.documents),
@@ -415,6 +425,7 @@ class NoteStore:
                         payload = json.loads(
                             archive.read("metadata"),
                             object_pairs_hook=reject_duplicate_snapshot_fields,
+                            parse_constant=reject_nonstandard_json_constant,
                         )
                         self._validate_snapshot_metadata(payload)
                         expected_members = {"index", "metadata"}
@@ -463,7 +474,7 @@ class NoteStore:
                 raise ValueError("Incomplete legacy study index")
             index = faiss.read_index(str(self.faiss_path))
             with self.chunks_path.open(encoding="utf-8") as f:
-                payload = json.load(f)
+                payload = json.load(f, parse_constant=reject_nonstandard_json_constant)
             if isinstance(payload, dict):
                 payload.setdefault("tags", ["untagged"] * len(payload.get("chunks", [])))
                 payload.setdefault("meta", [{}] * len(payload.get("chunks", [])))

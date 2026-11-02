@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 2 November 2026 — standards-compliant persisted JSON numbers
+
+Study snapshot and legacy metadata loading now reject Python's non-standard
+`NaN`, `Infinity`, and `-Infinity` JSON constants. Snapshot saves also disable
+their serialization and construct the complete standards-compliant metadata
+string before creating a candidate archive. A rejected in-memory value cannot
+replace the active snapshot, and malformed snapshot metadata fails before the
+native FAISS index parser runs.
+
+Regression coverage checks all three non-standard constants, confirms the
+snapshot parser rejects them before index deserialization, confirms the legacy
+reader cannot bypass the rule, and confirms a failed save preserves the active
+snapshot. This removes a cross-parser interpretation ambiguity; it does not
+authenticate or encrypt metadata.
+
 ## 1 November 2026 — persisted vector-value contract
 
 Study snapshot save and load now require every persisted FAISS vector to contain

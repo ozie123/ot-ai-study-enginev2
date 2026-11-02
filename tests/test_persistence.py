@@ -210,6 +210,50 @@ def test_load_rejects_duplicate_json_fields_before_deserializing_index(
         NoteStore(tmp_path).load()
 
 
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_load_rejects_nonstandard_json_constants_before_deserializing_index(
+    tmp_path, monkeypatch, constant
+):
+    store = populated(tmp_path)
+    store.save()
+    metadata = (
+        '{"chunks":["original"],"tags":["week1"],'
+        f'"meta":[{{"confidence":{constant}}}],"dim":2}}'
+    ).encode()
+    replace_snapshot_metadata_bytes(store.snapshot_path, metadata)
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before metadata validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Invalid study snapshot metadata JSON"):
+        NoteStore(tmp_path).load()
+
+
+def test_nonstandard_json_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.meta = [{"confidence": float("nan")}]
+
+    with pytest.raises(ValueError, match="Invalid study snapshot metadata JSON"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
+def test_legacy_load_rejects_nonstandard_json_constants(tmp_path):
+    store = populated(tmp_path)
+    legacy(store)
+    store.chunks_path.write_text(
+        '{"chunks":["original"],"tags":["week1"],'
+        '"meta":[{"confidence":NaN}],"dim":2}'
+    )
+
+    with pytest.raises(ValueError, match="Invalid study snapshot metadata JSON"):
+        NoteStore(tmp_path).load()
+
+
 @pytest.mark.parametrize("kind", ["l2", "id-map"])
 def test_load_rejects_unsupported_faiss_index_type(tmp_path, kind):
     store = populated(tmp_path)
