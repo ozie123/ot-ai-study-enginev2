@@ -362,6 +362,45 @@ def test_invalid_chunk_metadata_save_preserves_previous_snapshot(tmp_path):
     assert store.snapshot_path.read_bytes() == original
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "NOTES.pdf",
+        "résumé.pdf",
+        " notes.pdf",
+        "notes..pdf",
+        f"{'a' * 171}.pdf",
+    ],
+)
+def test_load_rejects_noncanonical_document_manifest_before_deserializing_index(
+    tmp_path, monkeypatch, name
+):
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": b"%PDF document"}
+    store.save()
+    replace_snapshot_metadata(store.snapshot_path, documents=[name])
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before manifest validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Invalid document manifest"):
+        NoteStore(tmp_path).load()
+
+
+def test_noncanonical_document_manifest_save_preserves_previous_snapshot(tmp_path):
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": b"%PDF document"}
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.documents["NOTES.pdf"] = b"%PDF conflicting document"
+
+    with pytest.raises(ValueError, match="Invalid document manifest"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
 def test_load_rejects_duplicate_snapshot_member(tmp_path):
     store = populated(tmp_path)
     store.save()

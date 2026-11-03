@@ -42,6 +42,7 @@ SNAPSHOT_DOCUMENT_METADATA_FIELDS = frozenset({"documents", "pending"})
 SNAPSHOT_CHUNK_METADATA_FIELDS = frozenset(
     {"source", "page", "is_gold", "document_sha256"}
 )
+MAX_STORED_DOCUMENT_STEM_CHARS = 170
 
 
 # -----------------------
@@ -62,6 +63,19 @@ def reject_duplicate_snapshot_fields(pairs: list[tuple[str, object]]) -> dict[st
 
 def reject_nonstandard_json_constant(_value: str) -> None:
     raise ValueError("Invalid study snapshot metadata JSON")
+
+
+def is_canonical_stored_document_name(name: object) -> bool:
+    if not isinstance(name, str) or name != name.strip() or name != name.casefold():
+        return False
+    if not name.endswith(".pdf"):
+        return False
+    stem = name[:-4]
+    return (
+        0 < len(stem) <= MAX_STORED_DOCUMENT_STEM_CHARS
+        and stem == stem.rstrip(". ")
+        and re.fullmatch(r"[a-z0-9._ -]+", stem) is not None
+    )
 
 
 def chunk_text(text: str, max_chars: int = 900) -> list[str]:
@@ -529,13 +543,15 @@ class NoteStore:
         dimension = payload.get("dim")
         if type(dimension) is not int or dimension <= 0:
             raise ValueError("Invalid study index metadata dimension")
-        if "documents" in payload and not all(
-            isinstance(payload.get(group), list)
-            and all(isinstance(name, str) for name in payload[group])
-            for group in ("documents", "pending")
-        ):
-            raise ValueError("Invalid document manifest")
         if "documents" in payload:
+            for group in ("documents", "pending"):
+                names = payload.get(group)
+                if (
+                    not isinstance(names, list)
+                    or not all(is_canonical_stored_document_name(name) for name in names)
+                    or len(set(names)) != len(names)
+                ):
+                    raise ValueError("Invalid document manifest")
             for entry in payload["meta"]:
                 if (
                     not set(entry) <= SNAPSHOT_CHUNK_METADATA_FIELDS

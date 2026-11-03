@@ -1,5 +1,20 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 3 November 2026 — canonical persisted document names
+
+Document-aware snapshot save and load now enforce the same canonical filename
+contract produced by the upload path: lowercase ASCII PDF names, a non-empty
+stem of at most 170 characters, no trailing dot or space, and no duplicate
+entries within either manifest group. This prevents publishing or restoring a
+document entry that normal replacement and deletion routes cannot address
+unambiguously.
+
+Regression coverage rejects uppercase, Unicode, leading-space, trailing-dot,
+and overlong manifest names before FAISS deserialization. It also confirms an
+invalid in-memory manifest cannot replace the active snapshot. Existing API
+snapshots already store names in this form; this check does not rename damaged
+archives automatically or authenticate snapshot content.
+
 ## 2 November 2026 — standards-compliant persisted JSON numbers
 
 Study snapshot and legacy metadata loading now reject Python's non-standard
