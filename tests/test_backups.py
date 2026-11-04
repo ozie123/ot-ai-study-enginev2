@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -31,8 +32,16 @@ def populated(root: Path, owner: str = "s_" + "a" * 32) -> tuple[Path, str]:
     store.dim = 2
     store.chunks = ["private notes"]
     store.tags = ["week1"]
-    store.meta = [{"source": "notes.pdf", "page": 1, "is_gold": False}]
-    store.documents = {"notes.pdf": b"%PDF private"}
+    content = b"%PDF private"
+    store.meta = [
+        {
+            "source": "notes.pdf",
+            "page": 1,
+            "is_gold": False,
+            "document_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    ]
+    store.documents = {"notes.pdf": content}
     store.save()
     return root, token
 

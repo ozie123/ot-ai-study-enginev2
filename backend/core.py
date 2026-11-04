@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -373,6 +374,8 @@ class NoteStore:
             payload["documents"] = list(self.documents)
             payload["pending"] = list(self.pending)
         self._validate_snapshot(index, payload)
+        if self.documents is not None:
+            self._validate_active_document_content(self.documents, self.meta)
         try:
             serialized_metadata = json.dumps(
                 payload, ensure_ascii=False, allow_nan=False
@@ -466,9 +469,6 @@ class NoteStore:
                                 document_names[group] = names
                         if set(member_names) != expected_members:
                             raise ValueError("Invalid study snapshot archive")
-                        index = faiss.deserialize_index(
-                            np.frombuffer(archive.read("index"), dtype="uint8").copy()
-                        )
                         if document_names is not None:
                             documents = {
                                 name: archive.read(f"documents/{i}")
@@ -478,6 +478,12 @@ class NoteStore:
                                 name: archive.read(f"pending/{i}")
                                 for i, name in enumerate(document_names["pending"])
                             }
+                            self._validate_active_document_content(
+                                documents, payload["meta"]
+                            )
+                        index = faiss.deserialize_index(
+                            np.frombuffer(archive.read("index"), dtype="uint8").copy()
+                        )
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)
@@ -588,6 +594,20 @@ class NoteStore:
                 norm, 1.0, rtol=1e-4, atol=1e-5
             ):
                 raise ValueError("Invalid study index vectors")
+
+    @staticmethod
+    def _validate_active_document_content(documents, metadata) -> None:
+        for name, content in documents.items():
+            digest = hashlib.sha256(content).hexdigest()
+            matching = [
+                entry
+                for entry in metadata
+                if str(entry.get("source", "")).casefold() == name
+            ]
+            if not matching or any(
+                entry.get("document_sha256") != digest for entry in matching
+            ):
+                raise ValueError("Study document content is inconsistent")
 
     def _validate_snapshot_archive_limits(
         self, archive: zipfile.ZipFile, *, stored_bytes: int

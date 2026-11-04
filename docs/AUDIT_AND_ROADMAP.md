@@ -1,5 +1,21 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 4 November 2026 — active PDF-to-index integrity
+
+Document-aware snapshot save and load now hash every active PDF and require all
+indexed chunks for that canonical filename to carry the same SHA-256. Altered
+active bytes, missing chunk provenance, or a mismatched digest fail closed.
+Loading validates embedded active documents before native FAISS
+deserialization, while saving validates before creating a candidate archive.
+
+Regression coverage changes embedded PDF bytes and removes an active checksum,
+confirming both failures precede index parsing, and confirms an invalid
+in-memory document cannot replace the active snapshot. Pending replacement
+bytes remain intentionally exempt because their chunks still describe the
+rollback copy until ingestion succeeds. This consistency check does not provide
+cryptographic origin authentication or simultaneous database/filesystem
+transactions.
+
 ## 3 November 2026 — canonical persisted document names
 
 Document-aware snapshot save and load now enforce the same canonical filename

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import zipfile
@@ -56,6 +57,15 @@ def replace_snapshot_index(snapshot, index):
     with zipfile.ZipFile(snapshot, "w") as archive:
         for name, content in files.items():
             archive.writestr(name, content)
+
+
+def replace_snapshot_member(snapshot, member_name, content):
+    with zipfile.ZipFile(snapshot) as archive:
+        files = {member.filename: archive.read(member) for member in archive.infolist()}
+    files[member_name] = content
+    with zipfile.ZipFile(snapshot, "w") as archive:
+        for name, stored_content in files.items():
+            archive.writestr(name, stored_content)
 
 
 def test_snapshot_roundtrip_and_search(tmp_path, monkeypatch):
@@ -338,6 +348,7 @@ def test_load_rejects_invalid_chunk_metadata_before_deserializing_index(
 ):
     store = populated(tmp_path)
     store.documents = {"notes.pdf": b"%PDF document"}
+    store.meta[0]["document_sha256"] = hashlib.sha256(b"%PDF document").hexdigest()
     store.save()
     replace_snapshot_metadata(store.snapshot_path, meta=metadata)
 
@@ -352,6 +363,7 @@ def test_load_rejects_invalid_chunk_metadata_before_deserializing_index(
 def test_invalid_chunk_metadata_save_preserves_previous_snapshot(tmp_path):
     store = populated(tmp_path)
     store.documents = {"notes.pdf": b"%PDF document"}
+    store.meta[0]["document_sha256"] = hashlib.sha256(b"%PDF document").hexdigest()
     store.save()
     original = store.snapshot_path.read_bytes()
     store.meta = [{"source": "notes.pdf", "page": False}]
@@ -377,6 +389,7 @@ def test_load_rejects_noncanonical_document_manifest_before_deserializing_index(
 ):
     store = populated(tmp_path)
     store.documents = {"notes.pdf": b"%PDF document"}
+    store.meta[0]["document_sha256"] = hashlib.sha256(b"%PDF document").hexdigest()
     store.save()
     replace_snapshot_metadata(store.snapshot_path, documents=[name])
 
@@ -391,11 +404,66 @@ def test_load_rejects_noncanonical_document_manifest_before_deserializing_index(
 def test_noncanonical_document_manifest_save_preserves_previous_snapshot(tmp_path):
     store = populated(tmp_path)
     store.documents = {"notes.pdf": b"%PDF document"}
+    store.meta[0]["document_sha256"] = hashlib.sha256(b"%PDF document").hexdigest()
     store.save()
     original = store.snapshot_path.read_bytes()
     store.documents["NOTES.pdf"] = b"%PDF conflicting document"
 
     with pytest.raises(ValueError, match="Invalid document manifest"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("corruption", ["document-bytes", "missing-checksum"])
+def test_load_rejects_active_document_content_mismatch_before_deserializing_index(
+    tmp_path, monkeypatch, corruption
+):
+    content = b"%PDF original document"
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": content}
+    store.meta = [
+        {
+            "source": "notes.pdf",
+            "page": 1,
+            "document_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    ]
+    store.save()
+    if corruption == "document-bytes":
+        replace_snapshot_member(
+            store.snapshot_path, "documents/0", b"%PDF altered document"
+        )
+    else:
+        replace_snapshot_metadata(
+            store.snapshot_path,
+            meta=[{"source": "notes.pdf", "page": 1}],
+        )
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before PDF validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Study document content is inconsistent"):
+        NoteStore(tmp_path).load()
+
+
+def test_active_document_content_mismatch_save_preserves_previous_snapshot(tmp_path):
+    content = b"%PDF original document"
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": content}
+    store.meta = [
+        {
+            "source": "notes.pdf",
+            "page": 1,
+            "document_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    ]
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.documents["notes.pdf"] = b"%PDF altered document"
+
+    with pytest.raises(ValueError, match="Study document content is inconsistent"):
         store.save()
 
     assert store.snapshot_path.read_bytes() == original
