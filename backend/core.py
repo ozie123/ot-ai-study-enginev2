@@ -375,7 +375,9 @@ class NoteStore:
             payload["pending"] = list(self.pending)
         self._validate_snapshot(index, payload)
         if self.documents is not None:
-            self._validate_active_document_content(self.documents, self.meta)
+            self._validate_active_document_content(
+                self.documents, self.pending, self.meta
+            )
         try:
             serialized_metadata = json.dumps(
                 payload, ensure_ascii=False, allow_nan=False
@@ -479,7 +481,7 @@ class NoteStore:
                                 for i, name in enumerate(document_names["pending"])
                             }
                             self._validate_active_document_content(
-                                documents, payload["meta"]
+                                documents, pending, payload["meta"]
                             )
                         index = faiss.deserialize_index(
                             np.frombuffer(archive.read("index"), dtype="uint8").copy()
@@ -596,7 +598,15 @@ class NoteStore:
                 raise ValueError("Invalid study index vectors")
 
     @staticmethod
-    def _validate_active_document_content(documents, metadata) -> None:
+    def _validate_active_document_content(documents, pending, metadata) -> None:
+        document_names = set(documents)
+        indexed_names = {
+            str(entry.get("source", "")).casefold() for entry in metadata
+        }
+        if not document_names <= indexed_names or not indexed_names <= (
+            document_names | set(pending)
+        ):
+            raise ValueError("Study document content is inconsistent")
         for name, content in documents.items():
             digest = hashlib.sha256(content).hexdigest()
             matching = [

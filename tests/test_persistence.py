@@ -469,6 +469,48 @@ def test_active_document_content_mismatch_save_preserves_previous_snapshot(tmp_p
     assert store.snapshot_path.read_bytes() == original
 
 
+def test_load_rejects_chunk_without_active_document_before_deserializing_index(
+    tmp_path, monkeypatch
+):
+    content = b"%PDF original document"
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": content}
+    store.meta[0]["document_sha256"] = hashlib.sha256(content).hexdigest()
+    store.save()
+    replace_snapshot_metadata(
+        store.snapshot_path,
+        meta=[
+            {
+                "source": "missing.pdf",
+                "page": 1,
+                "document_sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    )
+
+    def unexpected_deserialize(*_args, **_kwargs):
+        raise AssertionError("index must not be deserialized before PDF validation")
+
+    monkeypatch.setattr(core.faiss, "deserialize_index", unexpected_deserialize)
+    with pytest.raises(ValueError, match="Study document content is inconsistent"):
+        NoteStore(tmp_path).load()
+
+
+def test_chunk_without_active_document_save_preserves_previous_snapshot(tmp_path):
+    content = b"%PDF original document"
+    store = populated(tmp_path)
+    store.documents = {"notes.pdf": content}
+    store.meta[0]["document_sha256"] = hashlib.sha256(content).hexdigest()
+    store.save()
+    original = store.snapshot_path.read_bytes()
+    store.meta[0]["source"] = "missing.pdf"
+
+    with pytest.raises(ValueError, match="Study document content is inconsistent"):
+        store.save()
+
+    assert store.snapshot_path.read_bytes() == original
+
+
 def test_load_rejects_duplicate_snapshot_member(tmp_path):
     store = populated(tmp_path)
     store.save()

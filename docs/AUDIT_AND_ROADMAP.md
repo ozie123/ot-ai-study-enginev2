@@ -1,5 +1,23 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 5 November 2026 — active document/chunk referential integrity
+
+Document-aware snapshots now require every active PDF to have indexed chunks
+and every indexed chunk source to have active or pending PDF bytes. A chunk
+cannot remain searchable without a recoverable source, while a pending-only
+indexed source remains permitted for the legacy migration path until successful
+ingestion replaces the unverified old index. This referential check runs before
+native FAISS deserialization on load and before candidate archive creation on
+save.
+
+Regression coverage injects an otherwise valid chunk whose source is absent
+from the active manifest, confirms loading rejects it before index parsing, and
+confirms an invalid in-memory relationship cannot replace the active snapshot.
+Pending bytes remain outside active-content hashing because they are not active
+until ingestion succeeds; their names participate only to preserve the bounded
+legacy transition described above. This check does not authenticate snapshots
+or provide simultaneous database/filesystem transactions.
+
 ## 4 November 2026 — active PDF-to-index integrity
 
 Document-aware snapshot save and load now hash every active PDF and require all
