@@ -234,6 +234,10 @@ python -m compileall -q backend
 
 The test suite does not make live OpenAI requests. It mocks successful Responses API output, structured flashcards, embedding batches, malformed output, authentication failure, rate limiting, timeouts, connection failure, and provider unavailability. A deterministic API-level journey also covers session startup, upload, indexing, answers, flashcards, same-name replacement, replacement-aware retrieval, and deletion.
 
+Chat questions and flashcard topics are trimmed and must contain non-whitespace
+text. Blank requests fail schema validation before they reserve usage budget,
+load study data, compute embeddings, or call an AI provider.
+
 ## Render deployment
 
 The current Render dashboard configuration is not stored in this repository, so its live build/start values cannot be proven from Git alone. The repository-compatible values are:

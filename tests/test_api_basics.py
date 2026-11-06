@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from backend import server
 
 
@@ -46,6 +48,36 @@ def test_request_validation_rejects_unknown_fields(client):
         json={"question": "Hello", "mode": "normal", "unexpected": True},
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "endpoint,payload",
+    [("/chat", {"question": " \t\n "}), ("/flashcards", {"topic": " \t\n "})],
+)
+def test_blank_ai_input_is_rejected_before_budget_or_provider_work(
+    client, monkeypatch, endpoint, payload
+):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Blank input must not reserve usage or reach provider work")
+
+    monkeypatch.setattr(server, "reserve_ai_request", forbidden)
+    monkeypatch.setattr(server, "load_store_for_user", forbidden)
+    monkeypatch.setattr(server, "create_openai_client", forbidden)
+
+    response = client.post(endpoint, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "model,field,value,expected",
+    [
+        (server.ChatRequest, "question", "  useful question  ", "useful question"),
+        (server.FlashcardRequest, "topic", "  useful topic  ", "useful topic"),
+    ],
+)
+def test_ai_input_is_normalized_before_route_work(model, field, value, expected):
+    assert getattr(model(**{field: value}), field) == expected
 
 
 def test_security_headers_are_present(client):

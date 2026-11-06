@@ -1,5 +1,17 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 6 November 2026 — reject blank AI work before accounting
+
+Chat questions and flashcard topics now normalize surrounding whitespace and
+reject whitespace-only values during request-model validation. Invalid blank
+requests therefore fail before usage-budget reservation, study-index loading,
+embedding work, or paid provider calls.
+
+Regression coverage proves both AI routes reject blank input without entering
+route-owned accounting or provider work and confirms nonblank input is trimmed
+before route processing. This is an application-level input guard, not an
+edge-rate limit or guaranteed monetary ceiling.
+
 ## 5 November 2026 — active document/chunk referential integrity
 
 Document-aware snapshots now require every active PDF to have indexed chunks

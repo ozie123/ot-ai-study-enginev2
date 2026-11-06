@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -160,10 +160,26 @@ class ChatRequest(StrictRequest):
     tag: str | None = Field(default=None, min_length=1, max_length=32)
     mode: Literal["normal", "exam"] = "normal"
 
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Question must not be blank")
+        return value
+
 
 class FlashcardRequest(StrictRequest):
     topic: str = Field(min_length=1, max_length=500)
     tag: str | None = Field(default=None, min_length=1, max_length=32)
+
+    @field_validator("topic")
+    @classmethod
+    def normalize_topic(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Topic must not be blank")
+        return value
 
 
 class _UploadBodyTooLarge(Exception):
@@ -844,7 +860,7 @@ def chat_api(
             answer = generate_answer(
                 create_openai_client(api_key),
                 context=context,
-                question=payload.question.strip(),
+                question=payload.question,
                 mode=payload.mode,
             )
     except Exception as error:
@@ -870,7 +886,7 @@ def flashcards_api(
     if not store.chunks:
         return {"flashcards": [], "message": "Upload and ingest PDFs first."}
 
-    topic = payload.topic.strip()
+    topic = payload.topic
     query = topic
     if tag is None and re.fullmatch(r"week\s*\d{1,2}", topic, flags=re.IGNORECASE):
         tag = validate_tag(re.sub(r"\s+", "", topic.lower()))
