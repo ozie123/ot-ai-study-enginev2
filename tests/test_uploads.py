@@ -106,7 +106,7 @@ def test_streamed_oversized_upload_is_stopped_without_content_length(monkeypatch
         sent.append(message)
 
     scope = {"type": "http", "method": "POST", "path": "/upload_zip", "headers": []}
-    asyncio.run(server.UploadBodyLimitMiddleware(downstream)(scope, receive, send))
+    asyncio.run(server.RequestBodyLimitMiddleware(downstream)(scope, receive, send))
 
     assert consumed == [b"1234"]
     assert sent[0]["status"] == 413

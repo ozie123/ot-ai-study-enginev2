@@ -1,5 +1,19 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 7 November 2026 — bound JSON bodies before parsing
+
+Chat, flashcard, and ingestion requests now have a configurable raw-body limit
+before FastAPI buffers or decodes JSON. Requests whose declared length exceeds
+the limit fail immediately, while bodies without `Content-Length` are counted
+and stopped as they stream. This prevents large invalid JSON payloads from
+bypassing the existing field-length checks and consuming unbounded parser
+memory before route validation.
+
+Regression coverage verifies pre-parser rejection for all three routes and
+early termination of an oversized chunked body. This is application-level
+protection only: bytes still reach the HTTP server, so a matching edge/proxy
+limit and per-IP controls remain necessary.
+
 ## 6 November 2026 — reject blank AI work before accounting
 
 Chat questions and flashcard topics now normalize surrounding whitespace and

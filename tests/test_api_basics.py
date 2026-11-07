@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from backend import server
@@ -78,6 +80,57 @@ def test_blank_ai_input_is_rejected_before_budget_or_provider_work(
 )
 def test_ai_input_is_normalized_before_route_work(model, field, value, expected):
     assert getattr(model(**{field: value}), field) == expected
+
+
+@pytest.mark.parametrize("endpoint", ["/chat", "/flashcards", "/ingest_user_pdfs"])
+def test_declared_oversized_json_is_rejected_before_parsing(client, monkeypatch, endpoint):
+    monkeypatch.setattr(server, "MAX_JSON_REQUEST_BYTES", 16)
+
+    response = client.post(
+        endpoint,
+        content=b"x" * 17,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "detail": "JSON request body exceeds the configured safety limit."
+    }
+
+
+def test_streamed_oversized_json_is_stopped_without_content_length(monkeypatch):
+    monkeypatch.setattr(server, "MAX_JSON_REQUEST_BYTES", 7)
+    consumed: list[bytes] = []
+
+    async def downstream(_scope, receive, send):
+        while True:
+            message = await receive()
+            consumed.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    messages = iter(
+        [
+            {"type": "http.request", "body": b"1234", "more_body": True},
+            {"type": "http.request", "body": b"5678", "more_body": True},
+            {"type": "http.request", "body": b"ignored", "more_body": False},
+        ]
+    )
+    sent = []
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/chat", "headers": []}
+    asyncio.run(server.RequestBodyLimitMiddleware(downstream)(scope, receive, send))
+
+    assert consumed == [b"1234"]
+    assert sent[0]["status"] == 413
 
 
 def test_security_headers_are_present(client):

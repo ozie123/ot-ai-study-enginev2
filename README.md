@@ -146,6 +146,7 @@ encrypted and access-controlled outside the application.
 | `OT_DATA_DIR` | No | `backend/users` | Runtime storage root |
 | `MAX_UPLOAD_BYTES` | No | `26214400` | Maximum ZIP request size |
 | `MAX_UPLOAD_REQUEST_OVERHEAD_BYTES` | No | `65536` | Multipart envelope allowance above the ZIP limit |
+| `MAX_JSON_REQUEST_BYTES` | No | `16384` | Raw body limit for chat, flashcard, and ingestion JSON requests |
 | `MAX_ZIP_MEMBERS` | No | `50` | Maximum files in one ZIP |
 | `MAX_PDF_BYTES` | No | `12582912` | Maximum expanded size per PDF |
 | `MAX_TOTAL_UNCOMPRESSED_BYTES` | No | `52428800` | Maximum expanded PDFs per ZIP |
@@ -237,6 +238,12 @@ The test suite does not make live OpenAI requests. It mocks successful Responses
 Chat questions and flashcard topics are trimmed and must contain non-whitespace
 text. Blank requests fail schema validation before they reserve usage budget,
 load study data, compute embeddings, or call an AI provider.
+
+Chat, flashcard, and ingestion JSON bodies are capped before FastAPI buffers or
+decodes them. Declared oversized bodies are rejected immediately, and chunked
+bodies without `Content-Length` are counted while streaming. Configure the
+same or a stricter request-body ceiling at the deployment edge because the
+application limit cannot prevent bytes from reaching the HTTP server.
 
 ## Render deployment
 
