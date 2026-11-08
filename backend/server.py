@@ -126,6 +126,15 @@ MAX_UPLOADS_PER_SESSION_HOUR = _env_int(
 MAX_UPLOADS_PER_HOUR = _env_int(
     "MAX_UPLOADS_PER_HOUR", 200, minimum=1, maximum=1_000_000
 )
+MAX_CONCURRENT_UPLOADS_PER_SESSION = _env_int(
+    "MAX_CONCURRENT_UPLOADS_PER_SESSION", 1, minimum=1, maximum=1000
+)
+MAX_CONCURRENT_UPLOADS = _env_int(
+    "MAX_CONCURRENT_UPLOADS", 4, minimum=1, maximum=10_000
+)
+UPLOAD_CONCURRENCY_LEASE_SECONDS = _env_int(
+    "UPLOAD_CONCURRENCY_LEASE_SECONDS", 600, minimum=60, maximum=86_400
+)
 MAX_CONCURRENT_AI_REQUESTS_PER_SESSION = _env_int(
     "MAX_CONCURRENT_AI_REQUESTS_PER_SESSION", 1, minimum=1, maximum=1000
 )
@@ -404,6 +413,31 @@ def reserve_upload(user_id: str) -> None:
             (f"upload:owner:{user_id}:hour", MAX_UPLOADS_PER_SESSION_HOUR, 3600),
         ],
     )
+
+
+@contextmanager
+def upload_request_slot(user_id: str) -> Iterator[None]:
+    try:
+        with usage_limits.lease(
+            USERS_DIR,
+            [
+                ("upload-concurrency:global", MAX_CONCURRENT_UPLOADS),
+                (
+                    f"upload-concurrency:owner:{user_id}",
+                    MAX_CONCURRENT_UPLOADS_PER_SESSION,
+                ),
+            ],
+            seconds=UPLOAD_CONCURRENCY_LEASE_SECONDS,
+        ):
+            yield
+    except HTTPException as error:
+        if error.status_code == 429:
+            raise HTTPException(
+                429,
+                "Upload capacity is busy. Try again shortly.",
+                headers=error.headers,
+            ) from error
+        raise
 
 
 @contextmanager
@@ -689,12 +723,13 @@ async def upload_zip(file: UploadFile = File(...), user_id: str = Depends(get_us
         raise HTTPException(status_code=400, detail="Please upload a ZIP file.")
 
     reserve_upload(user_id)
-    try:
-        content = await read_upload_limited(file)
-    finally:
-        await file.close()
-    pdfs = extract_valid_pdfs(content)
-    await run_in_threadpool(stage_pdfs, user_id, pdfs)
+    with upload_request_slot(user_id):
+        try:
+            content = await read_upload_limited(file)
+        finally:
+            await file.close()
+        pdfs = extract_valid_pdfs(content)
+        await run_in_threadpool(stage_pdfs, user_id, pdfs)
     return {"uploaded_pdfs": len(pdfs), "filenames": [name for name, _ in pdfs]}
 
 

@@ -210,6 +210,23 @@ def test_upload_budget_rejects_before_application_reads_or_decompresses(client, 
     assert int(response.headers["retry-after"]) > 0
 
 
+def test_upload_concurrency_rejects_before_file_read_or_decompression(client, monkeypatch):
+    owner = server.sessions.lookup(
+        server.USERS_DIR, client.cookies.get(server.SESSION_COOKIE_NAME)
+    )[0]
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("A rejected concurrent upload must not read the spooled ZIP")
+
+    monkeypatch.setattr(server, "read_upload_limited", forbidden)
+    with server.upload_request_slot(owner):
+        response = client.post("/upload_zip", files=pdf_zip())
+
+    assert response.status_code == 429
+    assert response.json() == {"detail": "Upload capacity is busy. Try again shortly."}
+    assert int(response.headers["retry-after"]) > 0
+
+
 def test_ai_concurrency_rejects_provider_work_but_not_control_routes(client, monkeypatch):
     assert client.post("/upload_zip", files=pdf_zip()).status_code == 200
     owner = server.sessions.lookup(

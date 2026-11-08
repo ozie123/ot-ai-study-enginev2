@@ -160,6 +160,9 @@ encrypted and access-controlled outside the application.
 | `MAX_SNAPSHOT_MEMBERS` | No | `1002` | Maximum ZIP members in one study snapshot |
 | `MAX_UPLOADS_PER_SESSION_HOUR` | No | `20` | ZIP upload attempts per session per UTC-aligned hour |
 | `MAX_UPLOADS_PER_HOUR` | No | `200` | ZIP upload attempts across the service per UTC-aligned hour |
+| `MAX_CONCURRENT_UPLOADS_PER_SESSION` | No | `1` | Simultaneous ZIP processing operations per session |
+| `MAX_CONCURRENT_UPLOADS` | No | `4` | Simultaneous ZIP processing operations across the service |
+| `UPLOAD_CONCURRENCY_LEASE_SECONDS` | No | `600` | Renewal horizon and crash/accounting-outage recovery window for an upload slot |
 | `MAX_CONCURRENT_AI_REQUESTS_PER_SESSION` | No | `1` | Simultaneous embedding/retrieval/generation operations per session |
 | `MAX_CONCURRENT_AI_REQUESTS` | No | `4` | Simultaneous AI operations across the service |
 | `AI_CONCURRENCY_LEASE_SECONDS` | No | `3600` | Renewal horizon and crash/accounting-outage recovery window for an AI slot |
@@ -389,6 +392,8 @@ Before exposing the app publicly, review these positive integer settings:
 | `MAX_AI_REQUESTS_PER_DAY` | 500 | Those AI route attempts combined across all owners |
 | `MAX_UPLOADS_PER_SESSION_HOUR` | 20 | ZIP upload attempts per owner |
 | `MAX_UPLOADS_PER_HOUR` | 200 | ZIP upload attempts across all owners |
+| `MAX_CONCURRENT_UPLOADS_PER_SESSION` | 1 | In-flight ZIP processing per owner |
+| `MAX_CONCURRENT_UPLOADS` | 4 | In-flight ZIP processing across all owners |
 | `MAX_CONCURRENT_AI_REQUESTS_PER_SESSION` | 1 | In-flight AI work per owner |
 | `MAX_CONCURRENT_AI_REQUESTS` | 4 | In-flight AI work across all owners |
 
@@ -405,9 +410,16 @@ checked first. A failed session mint also retains its reservation.
 
 Upload attempts reserve both hourly budgets before the application reads or
 decompresses the uploaded file; invalid or failed attempts are not refunded.
+They also hold renewable, cross-worker per-owner and global leases while the
+spooled ZIP is copied into memory, validated/decompressed, and published into
+the staged snapshot. Excess concurrent uploads fail before the route copies
+the spooled ZIP into memory or starts archive validation and decompression.
+Normal completion releases the slots; a crashed worker recovers them after
+`UPLOAD_CONCURRENCY_LEASE_SECONDS` when renewal stops.
 This is application-level protection and does not prevent a reverse proxy from
-receiving a request body. Configure body-size and request-rate enforcement at a
-trusted edge as well.
+receiving a request body or FastAPI from parsing its multipart envelope before
+the route runs. Configure body-size, concurrency, and request-rate enforcement
+at a trusted edge as well.
 
 Embedding, retrieval and generation hold atomic per-owner and global SQLite
 leases. Workers sharing one local data directory therefore enforce the same

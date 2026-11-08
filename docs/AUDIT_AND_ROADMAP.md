@@ -1,5 +1,24 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 8 November 2026 — bound concurrent ZIP processing
+
+ZIP uploads now hold renewable SQLite-backed per-owner and service-wide leases
+while the spooled ZIP is copied into memory, the archive is validated and
+decompressed, and the staged snapshot is published. Requests above either
+concurrency limit fail before route code copies the spooled ZIP into memory.
+This closes a
+burst-amplification gap where valid requests could pass byte/count quotas yet
+consume ZIP validation, decompression, memory, and snapshot-write capacity
+simultaneously across workers.
+
+Regression coverage holds an owner upload slot, proves a second request returns
+HTTP 429 with `Retry-After`, and verifies its body reader is never entered.
+Slots release after normal completion and use the existing heartbeat/expiry
+recovery after worker failure. These local-filesystem leases do not provide
+multi-host coordination, edge bandwidth protection, or per-IP fairness.
+FastAPI still parses the multipart envelope before route-level owner leasing;
+the existing raw-body ceiling and a trusted-edge concurrency cap remain needed.
+
 ## 7 November 2026 — bound JSON bodies before parsing
 
 Chat, flashcard, and ingestion requests now have a configurable raw-body limit
