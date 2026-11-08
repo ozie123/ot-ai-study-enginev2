@@ -1,5 +1,29 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 8 November 2026 — PDF parser advisory remediation
+
+Security branch `codex/security-pypdf-20261108` starts from the published backup
+flush fix `b3322db0acbc580ac5cb952b90096255a225c02b`. GitHub run `42523475757`
+passed both platform jobs, but its normal dependency audit reported 18
+advisories in pypdf 6.19.0, with fixed versions through 6.21.4.
+
+The production pin is now pypdf 6.21.4, the same major release with Python 3.12
+support. An isolated environment installed from `requirements-dev.txt` resolves
+the updated pin successfully. A normal `python -m pip_audit -r
+backend/requirements.txt` reports no known vulnerabilities, and `python -m pip
+check` reports no broken requirements. No advisory exclusions, audit skips,
+resolver bypasses, or CI changes are used. Audit results describe this checkpoint
+and must continue to be checked as new advisories are published.
+
+Local native Windows validation passed 233 Python tests with 11 platform or
+privilege skips, all 5 JavaScript tests, Ruff, mypy for both win32 and Linux,
+JavaScript syntax, Python compilation, backup CLI startup, and whitespace checks.
+The existing Starlette/httpx deprecation warning remains. Tests use synthetic
+data and mocked providers, with no live AI calls.
+
+This update does not merge or deploy the application. Live preview and an
+isolated restore drill on target infrastructure remain release gates.
+
 ## 8 November 2026 — writable backup flush descriptors
 
 The first Windows follow-up is now published at

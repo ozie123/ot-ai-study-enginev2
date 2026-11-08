@@ -1,5 +1,10 @@
 # Changelog
 
+## PDF parser advisory remediation — Unreleased
+
+- Upgrade pypdf from 6.19.0 to 6.21.4 to address all 18 advisories reported
+  by the 8 November dependency audit, without audit exclusions or suppressions.
+
 ## Windows backup reliability — Unreleased
 
 - Flush existing backup and restore files through writable, non-truncating

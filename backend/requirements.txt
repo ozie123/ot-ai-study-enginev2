@@ -3,6 +3,6 @@ uvicorn==0.52.1
 python-dotenv==1.2.2
 numpy==2.5.1
 faiss-cpu==1.15.0
-pypdf==6.19.0
+pypdf==6.21.4
 openai==2.53.0
 python-multipart==0.0.32
