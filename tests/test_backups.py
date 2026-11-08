@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +22,7 @@ from backend.core import NoteStore
 
 def populated(root: Path, owner: str = "s_" + "a" * 32) -> tuple[Path, str]:
     token, generated_owner, _ = sessions.create(root)
-    with sqlite3.connect(root / "sessions.sqlite3") as connection:
+    with closing(sqlite3.connect(root / "sessions.sqlite3")) as connection, connection:
         connection.execute(
             "UPDATE sessions SET user_id = ? WHERE user_id = ?", (owner, generated_owner)
         )
@@ -366,7 +367,7 @@ def test_restore_parent_sync_failure_preserves_published_destination(tmp_path, m
 
 def test_backup_rejects_session_owner_missing_from_archive(tmp_path):
     source, _ = populated(tmp_path / "live")
-    with sqlite3.connect(source / "sessions.sqlite3") as connection:
+    with closing(sqlite3.connect(source / "sessions.sqlite3")) as connection, connection:
         connection.execute("UPDATE sessions SET user_id = ?", ("s_" + "b" * 32,))
 
     backup = tmp_path / "inconsistent.otai"
@@ -384,7 +385,7 @@ def test_verify_and_restore_reject_session_owner_missing_from_archive(tmp_path):
 
     database = tmp_path / "sessions.sqlite3"
     database.write_bytes(files[backups.DATABASE_NAME])
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("UPDATE sessions SET user_id = ?", ("s_" + "b" * 32,))
     files[backups.DATABASE_NAME] = database.read_bytes()
     manifest = json.loads(files[backups.MANIFEST_NAME])
@@ -419,7 +420,7 @@ def test_verify_and_restore_reject_session_owner_missing_from_archive(tmp_path):
 )
 def test_backup_rejects_invalid_session_records(tmp_path, column, value):
     source, _ = populated(tmp_path / "live")
-    with sqlite3.connect(source / "sessions.sqlite3") as connection:
+    with closing(sqlite3.connect(source / "sessions.sqlite3")) as connection, connection:
         connection.execute(f"UPDATE sessions SET {column} = ?", (value,))
 
     backup = tmp_path / "invalid-session.otai"
@@ -437,7 +438,7 @@ def test_verify_and_restore_reject_invalid_session_schema(tmp_path):
 
     database = tmp_path / "sessions.sqlite3"
     database.write_bytes(files[backups.DATABASE_NAME])
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("ALTER TABLE sessions RENAME TO unexpected_sessions")
     files[backups.DATABASE_NAME] = database.read_bytes()
     manifest = json.loads(files[backups.MANIFEST_NAME])
@@ -667,6 +668,7 @@ def test_backup_rejects_unicode_normalization_collisions(tmp_path):
 
 
 def test_backup_rejects_source_replacement_during_copy(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "O_ACCMODE", raising=False)
     source, _ = populated(tmp_path / "live")
     owner = "s_" + "a" * 32
     target = source / owner / "data" / "study.snapshot"
@@ -680,7 +682,7 @@ def test_backup_rejects_source_replacement_during_copy(tmp_path, monkeypatch):
         if (
             not replaced
             and Path(path) == target
-            and flags & os.O_ACCMODE == os.O_RDONLY
+            and flags & (os.O_WRONLY | os.O_RDWR) == os.O_RDONLY
         ):
             replaced = True
             os.replace(replacement, target)
@@ -695,10 +697,10 @@ def test_backup_rejects_source_replacement_during_copy(tmp_path, monkeypatch):
 
 
 def test_backup_rejects_session_database_replacement_after_open(tmp_path, monkeypatch):
-    source, _ = populated(tmp_path / "live")
+    source, token = populated(tmp_path / "live")
     target = source / backups.DATABASE_NAME
     replacement = tmp_path / "replacement.sqlite3"
-    with sqlite3.connect(replacement) as connection:
+    with closing(sqlite3.connect(replacement)) as connection, connection:
         connection.execute("CREATE TABLE replacement (value TEXT)")
 
     real_connect = backups.sqlite3.connect
@@ -709,13 +711,27 @@ def test_backup_rejects_session_database_replacement_after_open(tmp_path, monkey
         connection = real_connect(database, *args, **kwargs)
         if not replaced and kwargs.get("uri") is True:
             replaced = True
-            os.replace(replacement, target)
+            try:
+                os.replace(replacement, target)
+            except OSError:
+                # Windows denies replacement of an opened SQLite file. The
+                # injected connect wrapper owns this handle until it returns.
+                connection.close()
+                raise
         return connection
 
     monkeypatch.setattr(backups.sqlite3, "connect", replacing_connect)
     backup = tmp_path / "raced-database.otai"
-    with pytest.raises(ValueError, match="Missing or unsafe sessions.sqlite3"):
+    with pytest.raises((ValueError, PermissionError)) as caught:
         backups.create_backup(source, backup)
+    if isinstance(caught.value, PermissionError):
+        assert sys.platform == "win32"
+        assert caught.value.winerror == 32
+        assert replacement.exists()
+        assert sessions.lookup(source, token) is not None
+    else:
+        assert str(caught.value) == "Missing or unsafe sessions.sqlite3"
+        assert not replacement.exists()
     assert replaced is True
     assert not backup.exists()
 
@@ -814,6 +830,7 @@ def test_restore_verifies_and_streams_from_one_open_archive(tmp_path, monkeypatc
 
 
 def test_verify_rejects_archive_replacement_during_open(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "O_ACCMODE", raising=False)
     source, _ = populated(tmp_path / "live")
     backup = tmp_path / "backup.otai"
     backups.create_backup(source, backup)
@@ -824,7 +841,11 @@ def test_verify_rejects_archive_replacement_during_open(tmp_path, monkeypatch):
 
     def replacing_open(path, flags, mode=0o777, **kwargs):
         nonlocal replaced
-        if not replaced and Path(path) == backup and flags & os.O_ACCMODE == os.O_RDONLY:
+        if (
+            not replaced
+            and Path(path) == backup
+            and flags & (os.O_WRONLY | os.O_RDWR) == os.O_RDONLY
+        ):
             replaced = True
             os.replace(replacement, backup)
         return real_open(path, flags, mode, **kwargs)

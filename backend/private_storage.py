@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from pathlib import Path
 
 
 def ensure_private_directory(path: Path) -> None:
     """Create or restrict a directory without accepting a substituted entry."""
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "nt":
+    if sys.platform == "win32":
         return
 
     before = path.lstat()
@@ -47,7 +48,7 @@ def open_private_regular_file(path: Path, flags: int) -> int:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("Unsafe private storage file")
-        if os.name != "nt":
+        if sys.platform != "win32":
             os.fchmod(descriptor, 0o600)
             current = path.lstat()
             if stat.S_ISLNK(current.st_mode) or (current.st_dev, current.st_ino) != (

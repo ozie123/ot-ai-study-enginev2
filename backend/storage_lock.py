@@ -22,7 +22,7 @@ def _open_lock_file(path: Path):
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError("Unsafe study storage lock")
-        if os.name != "nt":
+        if sys.platform != "win32":
             os.fchmod(descriptor, 0o600)
         handle = os.fdopen(descriptor, "a+b")
         descriptor = -1

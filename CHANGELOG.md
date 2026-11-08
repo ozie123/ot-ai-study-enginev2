@@ -1,5 +1,15 @@
 # Changelog
 
+## Windows backup reliability — Unreleased
+
+- Close backup and validation SQLite connections on success and failure before
+  temporary cleanup or publication, avoiding Windows file-sharing errors.
+- Retain real connections in eight regression cases to prove explicit closure
+  without relying on garbage collection.
+- Close test-fixture databases, exercise replacement races with portable flags,
+  and recognize Windows' native protection against replacing an open database.
+- Fix four Windows-target mypy errors using explicit platform guards and types.
+
 ## PDF parser security update — Unreleased
 
 - Upgrade pypdf from 6.16.1 to 6.19.0 to include the published parser resource-exhaustion fixes.

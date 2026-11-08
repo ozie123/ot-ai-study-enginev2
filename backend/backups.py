@@ -21,7 +21,7 @@ import tempfile
 import unicodedata
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict, cast
@@ -122,9 +122,13 @@ def _database_identity(source: Path) -> tuple[int, int]:
 def _copy_database(source: Path, destination: Path) -> None:
     inspected_identity = _database_identity(source)
     source_uri = f"{source.as_uri()}?mode=ro"
+    # SQLite's transaction context does not close its connection. Release both
+    # handles before staging cleanup/publication, including failed opens/copies.
     with (
-        sqlite3.connect(source_uri, uri=True, timeout=10) as live,
-        sqlite3.connect(destination) as backup,
+        closing(sqlite3.connect(source_uri, uri=True, timeout=10)) as live,
+        closing(sqlite3.connect(destination)) as backup,
+        live,
+        backup,
     ):
         if _database_identity(source) != inspected_identity:
             raise ValueError(f"Missing or unsafe {DATABASE_NAME}")
@@ -139,8 +143,8 @@ def _copy_database(source: Path, destination: Path) -> None:
 def _session_records(database_path: Path) -> set[SessionRecord]:
     """Read and validate the recoverable authentication state in one snapshot."""
     try:
-        with sqlite3.connect(
-            f"{database_path.as_uri()}?mode=ro", uri=True
+        with closing(
+            sqlite3.connect(f"{database_path.as_uri()}?mode=ro", uri=True)
         ) as connection:
             if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise ValueError("Session database integrity check failed")
@@ -546,7 +550,7 @@ def verify_backup(
 
 def _publish_path_exclusive(staging: Path, destination: Path) -> None:
     """Atomically publish a file or directory without replacing a destination."""
-    if os.name == "nt":
+    if sys.platform == "win32":
         # Windows rename is already no-replace when the destination exists.
         os.rename(staging, destination)
         return
@@ -554,6 +558,7 @@ def _publish_path_exclusive(staging: Path, destination: Path) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     source = os.fsencode(staging)
     target = os.fsencode(destination)
+    result: int
     if sys.platform.startswith("linux"):
         try:
             rename_no_replace = libc.renameat2

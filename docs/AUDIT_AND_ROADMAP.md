@@ -1,5 +1,42 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 8 November 2026 — Windows backup cleanup after the first upload
+
+The completed 36-patch series is now published on
+`codex/upload-concurrency-20261108` at
+`ef39066b9ff3b3117545833af68555d2c3b6cc41`; its tree matches the verified local
+handoff (`a60e7982c7aacbcd5d69974cc1a916f274f832a7`). This follow-up starts from
+that published commit and does not replay the old patch series. Nothing was
+merged to main or deployed.
+
+GitHub run `42520998395` passed the Ubuntu job but exposed Windows cleanup
+failures. SQLite's connection context manager commits or rolls back transactions
+without closing the connection. Backup copying and session-record validation now
+close every connection explicitly, including failed destination opens, failed
+copies, invalid records, and invalid databases. Temporary database cleanup and
+restore publication therefore do not depend on garbage collection releasing an
+open Windows file handle.
+
+Eight regressions retain strong references to real SQLite connections and check
+that they are closed after success/failure and before archive/directory
+publication. All eight fail against the uploaded baseline. Backup test fixtures
+also close their database handles, replacement-race tests use portable file-open
+flags, and the database race test checks Windows' native rejection of replacing
+an open file while preserving both the source session and competing file.
+
+Local validation passed 241 Python tests and 5 JavaScript tests, Ruff, mypy for
+Linux and Windows targets, syntax/compilation checks, backup CLI startup, and
+whitespace checks. Tests used synthetic data and mocked providers with no live
+AI calls; the upstream Starlette/httpx deprecation warning remains.
+
+The four reported type errors reproduce with `mypy --platform win32`. Recognized
+platform guards and an explicit native-return annotation address those errors
+without suppressions. Native Windows execution is not available in this runner;
+the follow-up still needs a fresh Windows CI run. The original dependency audit
+also failed with 18 pypdf 6.19.0 advisories (listed fixes through 6.21.4).
+Dependency remediation remains with the security-update workflow; a passing
+audit, live preview, and target-infrastructure restore drill remain release gates.
+
 ## 8 November 2026 — bound concurrent ZIP processing
 
 ZIP uploads now hold renewable SQLite-backed per-owner and service-wide leases
