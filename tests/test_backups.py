@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -160,6 +161,68 @@ def test_backup_flushes_archive_before_publication_and_parent_after(tmp_path, mo
     backups.create_backup(source, output)
 
     assert events == ["archive", "parent"]
+
+
+@pytest.mark.parametrize("fail_flush", [False, True])
+def test_file_flush_uses_write_access_and_closes_without_changing_bytes(
+    tmp_path, monkeypatch, fail_flush
+):
+    path = tmp_path / "staged.otai"
+    content = b"completed private archive\x00\r\n"
+    path.write_bytes(content)
+    real_fsync = os.fsync
+    descriptors = []
+    failure = OSError(errno.EIO, "simulated flush failure")
+
+    def require_write_access(descriptor):
+        descriptors.append(descriptor)
+        # Zero-byte writes verify write access without modifying the file.
+        # This exposes the Windows flush requirement on every test platform.
+        assert os.write(descriptor, b"") == 0
+        if fail_flush:
+            raise failure
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(backups.os, "fsync", require_write_access)
+    if fail_flush:
+        with pytest.raises(OSError) as caught:
+            backups._fsync_file(path)
+        assert caught.value is failure
+    else:
+        backups._fsync_file(path)
+
+    assert path.read_bytes() == content
+    assert len(descriptors) == 1
+    with pytest.raises(OSError) as closed:
+        os.fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF
+
+
+def test_backup_restore_round_trip_with_write_required_for_file_flush(tmp_path, monkeypatch):
+    source, token = populated(tmp_path / "live")
+    real_fsync = os.fsync
+    flushed_files = []
+
+    def require_write_access(descriptor):
+        identity = os.fstat(descriptor)
+        if stat.S_ISREG(identity.st_mode):
+            assert os.write(descriptor, b"") == 0
+            flushed_files.append((identity.st_dev, identity.st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(backups.os, "fsync", require_write_access)
+    archive = tmp_path / "backup.otai"
+    manifest = backups.create_backup(source, archive)
+    assert backups.verify_backup(archive) == manifest
+    destination = tmp_path / "restored"
+    assert backups.restore_backup(archive, destination) == manifest
+    assert sessions.lookup(destination, token) == sessions.lookup(source, token)
+    for path in [archive, destination / backups.DATABASE_NAME]:
+        identity = path.stat()
+        assert (identity.st_dev, identity.st_ino) in flushed_files
+    store = NoteStore(destination / manifest["owners"][0] / "data")
+    assert store.load() is True
+    assert store.documents == {"notes.pdf": b"%PDF private"}
 
 
 def test_backup_sync_failure_before_publication_leaves_no_output(tmp_path, monkeypatch):
@@ -726,7 +789,8 @@ def test_backup_rejects_session_database_replacement_after_open(tmp_path, monkey
         backups.create_backup(source, backup)
     if isinstance(caught.value, PermissionError):
         assert sys.platform == "win32"
-        assert caught.value.winerror == 32
+        # Windows reports either access denied or a sharing violation here.
+        assert caught.value.winerror in {5, 32}
         assert replacement.exists()
         assert sessions.lookup(source, token) is not None
     else:

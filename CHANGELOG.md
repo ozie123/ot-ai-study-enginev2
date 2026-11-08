@@ -2,6 +2,11 @@
 
 ## Windows backup reliability — Unreleased
 
+- Flush existing backup and restore files through writable, non-truncating
+  descriptors, preserving bytes and propagating real durability failures.
+- Cover write-required flushes, descriptor closure after failure, and a full
+  backup/restore round trip; accept both observed Windows open-file rejection
+  codes while retaining the database race's preservation checks.
 - Close backup and validation SQLite connections on success and failure before
   temporary cleanup or publication, avoiding Windows file-sharing errors.
 - Retain real connections in eight regression cases to prove explicit closure

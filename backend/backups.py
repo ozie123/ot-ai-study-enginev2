@@ -64,7 +64,9 @@ SessionRecord = tuple[str, str, int]
 
 def _fsync_file(path: Path) -> None:
     """Flush one completed regular file before it can be published."""
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    # Windows' flush primitive needs write access. Open existing staging bytes
+    # without creating, truncating, or modifying them; flush errors stay fatal.
+    descriptor = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
     try:
         os.fsync(descriptor)
     finally:

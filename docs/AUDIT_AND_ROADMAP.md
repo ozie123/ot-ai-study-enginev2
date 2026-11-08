@@ -1,5 +1,39 @@
 # OT AI Study Engine — Audit and Upgrade Roadmap
 
+## 8 November 2026 — writable backup flush descriptors
+
+The first Windows follow-up is now published at
+`31ab9781c1d501583f08a9b225711d678d00e5a6` on
+`codex/fix-backup-handles-20261108`, with verified tree
+`579917171173b7e352bab2faceb47d76ad031c3d`. GitHub run `42522454206`
+passed Ubuntu and progressed to 199 passes, 31 failures and 11 skips on Windows.
+The remaining failures exposed the next portability boundary: flushing a
+read-only backup descriptor raises `EBADF` on Windows. One database-replacement
+test also received access-denied error 5 instead of sharing-violation error 32.
+
+Backup archive and restored-file flushes now open existing staging files with
+read/write access, without create/truncate flags. Flush failures still propagate
+and the descriptor always closes. The database-race test accepts either specific
+Windows rejection while continuing to require preservation of the original
+session, the competing file, and the absence of a published backup.
+
+Three new regression cases failed against the uploaded baseline. They enforce
+write access during a flush on the local platform, check byte preservation and
+descriptor closure on success/failure, and exercise a complete backup/verify/
+restore round trip under that requirement. This does not replace a native
+Windows CI run or provide a new Windows directory-flush guarantee.
+
+Local validation passed 244 Python tests and 5 JavaScript tests, Ruff, mypy for
+both Windows and Linux targets, syntax/compilation checks, backup CLI startup,
+and whitespace checks. All tests used synthetic data and mocked providers; no
+live AI calls were made. The upstream Starlette/httpx warning remains.
+
+The platform contract is documented by
+[Python's os.fsync documentation](https://docs.python.org/3.12/library/os.html#os.fsync)
+and [Microsoft's FlushFileBuffers requirements](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+Dependency remediation remains separate: the pypdf audit, native Windows CI,
+live preview, and target-infrastructure restore drill remain release gates.
+
 ## 8 November 2026 — Windows backup cleanup after the first upload
 
 The completed 36-patch series is now published on
